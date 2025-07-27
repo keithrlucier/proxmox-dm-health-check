@@ -100,21 +100,123 @@ The **Proxmox Device Mapper Analysis and Cleanup Script** is a comprehensive Bas
 
 ### Scheduling with Cron
 
-To automate daily health checks and email reports (without triggering interactive cleanup), schedule the script via cron:
+When you run `crontab -e` as root for the first time, you may be prompted to choose an editor. We recommend selecting option `1` for `/bin/nano` as the easiest option.
 
-1. Edit root’s crontab:
+> Example Prompt:
+>
+> ```
+> Select an editor.  To change later, run 'select-editor'.
+>   1. /bin/nano        <---- easiest
+>   2. /usr/bin/vim.basic
+>   3. /usr/bin/vim.tiny
+> Choose 1-3 [1]:
+> ```
 
-   ```bash
-   crontab -e
-   ```
+Once inside the crontab file (opened with nano), scroll past the existing commented explanation lines (which begin with `#`) to the bottom of the file. Then, on a new line, **add the following line** to run the script every night at 10 PM:
 
-2. Add an entry to run daily at 8 AM:
+```bash
+0 22 * * * /root/Proxmox_DM_Cleanup_v26.sh > /var/log/proxmox_dmcheck.log 2>&1
+```
 
-   ```bash
-   0 8 * * * /usr/local/sbin/Proxmox_DM_Cleanup_v26.sh > /var/log/proxmox_dmcheck.log 2>&1
-   ```
+📌 This command means:
 
-> 🔒 Ensure the Mailjet credentials are valid and the script has execute permissions.
+- `0` minute
+- `22` hour (10 PM)
+- `* * *` = every day, every month, every weekday
+
+Save with `Ctrl+O`, press `Enter`, and exit with `Ctrl+X`.
+
+If done correctly, this sets a scheduled job visible by running:
+
+```bash
+crontab -l
+```
+
+#### ❌ To Remove the Cron Job Later
+
+Edit the crontab again:
+
+```bash
+crontab -e
+```
+
+Then delete the line containing the script command, save, and exit.
+
+Since this script is intended to be run as root, and is stored in `/root/Proxmox_DM_Cleanup_v26.sh`, here are the exact commands you should use to automate or manage the script's execution.
+
+#### ✅ Schedule the Script to Run Nightly at 10 PM
+
+Edit the root user's crontab:
+
+```bash
+crontab -e
+```
+
+Add the following line to the end of the file:
+
+```bash
+0 22 * * * /root/Proxmox_DM_Cleanup_v26.sh > /var/log/proxmox_dmcheck.log 2>&1
+```
+
+#### ❌ Remove the Scheduled Cron Job
+
+Edit the crontab again:
+
+```bash
+crontab -e
+```
+
+Then delete or comment out the line containing:
+
+```bash
+/root/Proxmox_DM_Cleanup_v26.sh
+```
+
+Save and exit.
+
+---
+
+### Suggested Commands (Run as Root)
+
+These are the recommended commands for installing, executing, and removing the script:
+
+```bash
+nano /root/Proxmox_DM_Cleanup_v26.sh      # Edit or paste the script
+chmod +x /root/Proxmox_DM_Cleanup_v26.sh  # Make it executable
+./Proxmox_DM_Cleanup_v26.sh               # Run the script manually
+rm /root/Proxmox_DM_Cleanup_v26.sh        # Remove the script completely
+```
+
+To completely remove the automation job and script from the system:
+
+#### ❌ Remove the Cron Job
+
+```bash
+crontab -e
+```
+
+Then delete the line containing:
+
+```bash
+/root/Proxmox_DM_Cleanup_v26.sh
+```
+
+Save and exit with `Ctrl+O` and `Ctrl+X`.
+
+#### 🧹 Remove the Script File
+
+```bash
+rm /root/Proxmox_DM_Cleanup_v26.sh
+```
+
+This fully removes both the scheduled task and the script itself from the system. These are the recommended commands for installing, executing, and removing the script:
+
+```bash
+nano /root/Proxmox_DM_Cleanup_v26.sh      # Edit or paste the script
+chmod +x /root/Proxmox_DM_Cleanup_v26.sh  # Make it executable
+./Proxmox_DM_Cleanup_v26.sh               # Run the script manually
+rm /root/Proxmox_DM_Cleanup_v26.sh        # Remove the script completely (if no longer needed)
+```
 
 ---
 
