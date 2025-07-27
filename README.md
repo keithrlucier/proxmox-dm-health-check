@@ -9,9 +9,6 @@ A powerful Bash-based toolkit for analyzing and safely cleaning up stale `dmsetu
 - Safe, interactive cleanup mode
 - No data loss – zero-impact cleanup
 
-## 📸 Screenshot Preview
-![Report Sample](https://github.com/keithrlucier/proxmox-dm-health-check/main/sample-report.png)
-
 ## 🛠 Usage
 ```bash
 bash Proxmox_DM_Cleanup_v26.sh
