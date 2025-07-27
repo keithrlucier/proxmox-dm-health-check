@@ -1,6 +1,6 @@
 # 🧹 Proxmox DM Setup Table Health & Cleanup Toolkit
 
-**Author**: Keith R Lucier — IT Professional with 30+ years of experience\
+**Author**: Keith R Lucier — \
 **Version**: 26\
 **Purpose**: Analyze and clean up stale `dmsetup` table entries on Proxmox nodes
 
