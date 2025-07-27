@@ -10,7 +10,7 @@ A powerful Bash-based toolkit for analyzing and safely cleaning up stale `dmsetu
 - No data loss – zero-impact cleanup
 
 ## 📸 Screenshot Preview
-![Report Sample](https://raw.githubusercontent.com/keithrlucier/proxmox-dm-health-check/main/sample-report.png)
+![Report Sample](https://github.com/keithrlucier/proxmox-dm-health-check/main/sample-report.png)
 
 ## 🛠 Usage
 ```bash
