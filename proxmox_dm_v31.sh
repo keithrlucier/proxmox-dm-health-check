@@ -6,11 +6,11 @@
 # Includes HTML email reporting via Mailjet API with GitHub links
 
 # Mailjet Configuration
-MAILJET_API_KEY="c43592765ac7f1368cbe599e4558f9f2"
-MAILJET_API_SECRET="9fa6ed98a5a92f0006eefef14f079ac7"
-FROM_EMAIL="automation@prosource-demo.com"
+MAILJET_API_KEY="%YOUR DETAILS HERE%"
+MAILJET_API_SECRET="%YOUR DETAILS HERE%"
+FROM_EMAIL="%YOUR DETAILS HERE%"
 FROM_NAME="ProxMox DM Issue Detector"
-TO_EMAIL="klucier@getprosource.com"
+TO_EMAIL="%YOUR DETAILS HERE%"
 
 echo "Proxmox Device Mapper Issue Detector v31"
 echo "Node: $(hostname)"
