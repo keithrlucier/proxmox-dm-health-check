@@ -1,4 +1,4 @@
-# Documentation: Proxmox Device Mapper Issue Detector (Version 34)
+# Documentation: Proxmox Device Mapper Issue Detector (Version 35)
 
 ## ⚠️ USE AT YOUR OWN RISK
 
@@ -6,7 +6,7 @@
 
 ## Overview
 
-The **Proxmox Device Mapper Issue Detector v34** is a comprehensive Bash-based tool designed to detect and resolve critical device mapper issues that cause VM failures in Proxmox Virtual Environment (PVE). The script's primary focus is identifying **duplicate device mapper entries** - the most critical issue that causes unpredictable VM behavior and startup failures.
+The **Proxmox Device Mapper Issue Detector v35** is a comprehensive Bash-based tool designed to detect and resolve critical device mapper issues that cause VM failures in Proxmox Virtual Environment (PVE). The script's primary focus is identifying **duplicate device mapper entries** - the most critical issue that causes unpredictable VM behavior and startup failures.
 
 **Key Focus Areas:**
 - **DUPLICATE ENTRIES** (Critical): Multiple device mapper entries for the same VM disk **on the same storage pool**
@@ -14,9 +14,21 @@ The **Proxmox Device Mapper Issue Detector v34** is a comprehensive Bash-based t
 
 The script performs real-time analysis, generates professional HTML reports with VM-specific health status, and delivers these reports via Mailjet email API. It includes a priority-based interactive cleanup mode for safe removal of problematic entries.
 
-## Critical Fixes in v32/v33/v34
+## Critical Fixes in v32/v33/v34/v35
 
-### 🆕 Version 34: Fixed Tombstone Detection Logic (CRITICAL)
+### 🆕 Version 35: Fixed Case Sensitivity Bug (CRITICAL)
+**The Bug**: Storage pool names were compared case-sensitively, causing false positive tombstones when storage.cfg used uppercase names but device mapper used lowercase.
+
+**Example of the bug**:
+- Storage.cfg has: `T1-HA07` (uppercase)
+- Device mapper has: `t1--ha07` (lowercase)
+- v34 comparison: `T1-HA07` ≠ `t1-ha07` = FALSE TOMBSTONE!
+
+**The Fix**: Storage pool names are now converted to lowercase before comparison, making all comparisons case-insensitive.
+
+**Impact**: This bug affected anyone using uppercase letters in storage pool names, causing all valid entries to be incorrectly marked as tombstones.
+
+### Version 34: Fixed Tombstone Detection Logic
 **The Bug**: Tombstone detection only compared VM ID + disk number, ignoring the storage pool. This caused FALSE POSITIVES when a VM legitimately had the same disk number on different storage pools.
 
 **Example of the bug**:
@@ -56,9 +68,9 @@ Note the double space after "storage" - the pool name was missing.
 
 ```bash
 # Download and run the script
-wget https://raw.githubusercontent.com/keithrlucier/proxmox-dm-health-check/main/Proxmox_DM_Cleanup_v34.sh
-chmod +x Proxmox_DM_Cleanup_v34.sh
-./Proxmox_DM_Cleanup_v34.sh
+wget https://raw.githubusercontent.com/keithrlucier/proxmox-dm-health-check/main/Proxmox_DM_Cleanup_v35.sh
+chmod +x Proxmox_DM_Cleanup_v35.sh
+./Proxmox_DM_Cleanup_v35.sh
 ```
 
 The script will:
@@ -74,6 +86,7 @@ The script will:
 ### Core Detection Features
 - **Duplicate Detection** (Priority 1): Identifies multiple DM entries for the same VM disk **on the same storage pool**
 - **Tombstone Detection** (Priority 2): Finds orphaned DM entries that don't match any VM configuration **including storage pool**
+- **Case-Insensitive Comparison** (v35): Correctly handles uppercase storage pool names
 - **VM-Centric Analysis**: Shows health status for each VM on the node
 - **Single-Pass Analysis**: No double-counting - each entry evaluated once
 - **Accurate Storage Pool Parsing**: Correctly handles all storage naming formats
@@ -118,14 +131,14 @@ Device mapper has:
   - ssd--ha01-vm--169--disk--0  ❌ (duplicate on SAME storage!)
 ```
 
-**NOT a duplicate example (v34 handles correctly):**
+**NOT a duplicate example (v35 handles correctly):**
 ```
 VM 119 config shows:
   efidisk0: SSD-HA07:vm-119-disk-0
   scsi1: SSD-HA01:vm-119-disk-0
 Device mapper has:
-  - ssd--ha07-vm--119--disk--0  ✓ (EFI disk)
-  - ssd--ha01-vm--119--disk--0  ✓ (Data disk - different storage!)
+  - ssd--ha07-vm--119--disk--0  ✅ (EFI disk)
+  - ssd--ha01-vm--119--disk--0  ✅ (Data disk - different storage!)
 ```
 
 **Why are duplicates critical?**
@@ -139,22 +152,20 @@ Device mapper has:
 **What are they?**
 Device mapper entries that exist but shouldn't - either the VM was deleted or the disk was removed from the VM's configuration.
 
-**v34 Improvement**: Tombstone detection now properly checks storage pool, preventing false positives when VMs have the same disk number on different storage pools.
+**v35 Improvement**: Case-insensitive comparison ensures uppercase storage pools (T1-HA07) match lowercase device mapper entries (t1--ha07).
 
-**True tombstone example (v34):**
+**True tombstone example (v35):**
 ```
 Device mapper has: ssd--ha01-vm--119--disk--0
-VM 119 config shows NO disk-0 on storage ssd-ha01
+VM 119 config shows NO disk-0 on storage ssd-ha01 (or SSD-HA01)
 Result: ❌ TOMBSTONE (correctly identified)
 ```
 
-**NOT a tombstone (v34 fixes this):**
+**NOT a tombstone (v35 fixes case sensitivity):**
 ```
-Device mapper has: ssd--ha01-vm--119--disk--0
-VM 119 config shows: 
-  - efidisk0: ssd-ha07:vm-119-disk-0
-  - scsi0: ssd-ha01:vm-119-disk-0  ✓ (matches!)
-Result: ✅ VALID (not a tombstone)
+Config shows: T1-HA07:vm-115-disk-0 (uppercase)
+Device mapper has: t1--ha07-vm--115--disk--0 (lowercase)
+Result: ✅ VALID (v35 correctly matches despite case difference)
 ```
 
 **Why do they matter?**
@@ -189,18 +200,20 @@ Result: ✅ VALID (not a tombstone)
 - Correctly handles VMs with same disk numbers on different storage pools
 - Provides clear visual grouping in output
 
-### 4. **Tombstone Detection Algorithm (v34 fixed)**
+### 4. **Tombstone Detection Algorithm (v35 perfected)**
 - Checks if VM exists on the node
 - If VM exists, verifies disk exists **on the specific storage pool**
+- **Case-insensitive comparison** (v35) - handles uppercase storage names
 - Only marks as tombstone if no match for VM:Storage:Disk combination
 - Prevents false positives for multi-pool configurations
 
-### 5. **Storage Pool Extraction (v33-34 improved)**
+### 5. **Storage Pool Extraction (v35 improved)**
 The script correctly extracts storage pool names from device mapper entries:
 - `ssd--ha01-vm--119--disk--0` → extracts `ssd-ha01`
 - `t1--ha05-vm--183--disk--0` → extracts `t1-ha05`
 - `t1b--ha04-vm--139--disk--0` → extracts `t1b-ha04`
 - Preserves legitimate "--" in storage pool names (v34)
+- **Converts to lowercase for comparison** (v35)
 
 ### 6. **Extended Disk Type Support (v34 new)**
 Now recognizes all common Proxmox disk types:
@@ -253,32 +266,32 @@ Two-phase cleanup process:
 ### Option 1: Download from GitHub (Recommended)
 ```bash
 # Download the latest version directly from GitHub
-wget https://raw.githubusercontent.com/keithrlucier/proxmox-dm-health-check/main/Proxmox_DM_Cleanup_v34.sh -O /root/Proxmox_DM_Cleanup_v34.sh
+wget https://raw.githubusercontent.com/keithrlucier/proxmox-dm-health-check/main/Proxmox_DM_Cleanup_v35.sh -O /root/Proxmox_DM_Cleanup_v35.sh
 
 # Set execution permissions
-chmod +x /root/Proxmox_DM_Cleanup_v34.sh
+chmod +x /root/Proxmox_DM_Cleanup_v35.sh
 
 # Run the script
-./Proxmox_DM_Cleanup_v34.sh
+./Proxmox_DM_Cleanup_v35.sh
 ```
 
 ### Option 2: Manual Installation
 ```bash
 # Copy the script to the node
-scp Proxmox_DM_Cleanup_v34.sh root@<node-ip>:/root/
+scp Proxmox_DM_Cleanup_v35.sh root@<node-ip>:/root/
 
 # Set execution permissions
-chmod +x /root/Proxmox_DM_Cleanup_v34.sh
+chmod +x /root/Proxmox_DM_Cleanup_v35.sh
 
 # Run the script
-./Proxmox_DM_Cleanup_v34.sh
+./Proxmox_DM_Cleanup_v35.sh
 ```
 
 ## Usage Examples
 
 ### Basic Analysis (Read-Only)
 ```bash
-./Proxmox_DM_Cleanup_v34.sh
+./Proxmox_DM_Cleanup_v35.sh
 ```
 This performs analysis and sends an email report without making any changes.
 
@@ -307,7 +320,7 @@ VM ID    NAME                           STATUS       DM HEALTH
       - ssd--ha01-vm--169--disk--0
 ```
 
-#### Tombstone Detection Output (v34 with storage pool)
+#### Tombstone Detection Output (v35 with case-insensitive matching)
 ```
 ❌ TOMBSTONE: ssd--ha01-vm--119--disk--0
    → VM 119 exists but has no disk-0 on storage ssd-ha01 in config
@@ -324,7 +337,7 @@ crontab -e
 
 Add this line:
 ```bash
-0 22 * * * /root/Proxmox_DM_Cleanup_v34.sh > /var/log/proxmox_dm_check.log 2>&1
+0 22 * * * /root/Proxmox_DM_Cleanup_v35.sh > /var/log/proxmox_dm_check.log 2>&1
 ```
 
 ## Configuration
@@ -369,7 +382,7 @@ This script modifies critical system components. While designed to be safe, **yo
 ### ✅ Safe by Design (But No Guarantees)
 - **Read-Only by Default**: No changes without explicit user consent
 - **Accurate Detection**: Only flags TRUE duplicates and tombstones (with storage pool verification)
-- **No False Positives**: v34 correctly handles multi-pool configurations
+- **No False Positives**: v35 correctly handles multi-pool configurations and case differences
 - **Priority-Based**: Critical issues (duplicates) handled first
 - **Clear Explanations**: Each issue explained with storage pool details
 - **No Data Loss**: Removes only device mapper entries, not actual disk data
@@ -416,13 +429,18 @@ This script modifies critical system components. While designed to be safe, **yo
 
 ### Scenario 5: Multiple Disks on Different Storage
 **Symptoms**: VM has disk-0 on multiple storage pools (legitimate config)
-**v34 Behavior**: Correctly identifies these as separate, valid disks
+**v35 Behavior**: Correctly identifies these as separate, valid disks
 **No Action Needed**: These are NOT duplicates or tombstones
 
 ### Scenario 6: NVMe or Multipath Storage
 **Symptoms**: Using newer storage configurations with nvme or mpath prefixes
-**v34 Behavior**: Now correctly recognizes and processes these disk types
+**v34+ Behavior**: Now correctly recognizes and processes these disk types
 **No Action Needed**: Full support for modern storage configurations
+
+### Scenario 7: Uppercase Storage Pool Names
+**Symptoms**: Storage pools use uppercase (T1-HA07, SSD-HA01)
+**v35 Behavior**: Case-insensitive comparison correctly matches uppercase config with lowercase DM
+**No Action Needed**: No false positives with uppercase storage names
 
 ## Testing the Script
 
@@ -435,7 +453,7 @@ dmsetup create test--ha01-vm--999--disk--0 --table '0 204800 linear /dev/sda 0'
 dmsetup create test--ha01-vm--999--disk--0-dup --table '0 204800 linear /dev/sda 0'
 ```
 
-#### Test Different Storage Pools (NOT duplicates or tombstones in v34)
+#### Test Different Storage Pools (NOT duplicates or tombstones in v35)
 ```bash
 # Create entries on different storage pools (should NOT be flagged as duplicates or tombstones)
 dmsetup create ssd--ha01-vm--998--disk--0 --table '0 204800 linear /dev/sda 0'
@@ -459,24 +477,30 @@ dmsetup remove test--ha01-vm--888--disk--0
 
 ## Version History
 
-### 🆕 Version 34 (Current)
+### 🆕 Version 35 (Current) - Case Insensitive Fix
+- **CRITICAL FIX**: Storage pools now compared case-insensitively
+- **Fixed Bug**: False positive tombstones when storage.cfg uses uppercase but DM uses lowercase
+- **Impact**: Anyone using uppercase storage pool names (T1-HA07, SSD-HA01, etc.)
+- **Result**: No more false positives due to case differences
+
+### 📋 Version 34 - Storage Pool Verification
 - **CRITICAL FIX**: Tombstone detection now includes storage pool comparison
 - **Fixed Bug**: False positive tombstones for VMs with same disk number on different storage pools
 - **New Feature**: Added support for `nvme` and `mpath` disk prefixes
 - **Improvement**: Better storage pool name extraction preserving legitimate "--"
 - **Enhancement**: Python-based JSON escaping for more reliable email delivery
 
-### 📋 Version 33
+### 📋 Version 33 - Storage Pool Extraction
 - **CRITICAL FIX**: Storage pool extraction regex corrected
-- **Fixed Bug**: Empty storage pool names in duplicate detection
+- **Fixed Bug**: Empty storage pool names in duplicate detection output
 - **Improvement**: Now shows storage pool in duplicate detection output
 
-### 📋 Version 32
+### 📋 Version 32 - Duplicate Detection Fix
 - **CRITICAL FIX**: Duplicate detection includes storage pool
 - **Fixed Bug**: False positives for same disk number on different storage pools
 - **Improvement**: Correctly handles complex VM disk configurations
 
-### 📋 Version 31
+### 📋 Version 31 - GitHub Integration
 - **New Feature**: GitHub integration in email reports
 - **Enhancement**: Repository links in email footer
 - **Improvement**: Easy access to documentation and issue reporting
@@ -492,12 +516,12 @@ dmsetup remove test--ha01-vm--888--disk--0
 
 ### Required Tools
 - **Proxmox Tools**: `qm`, `pct`, `dmsetup`
-- **Core Linux**: `awk`, `sed`, `grep`, `sort`, `uniq`, `wc`
+- **Core Linux**: `awk`, `sed`, `grep`, `sort`, `uniq`, `wc`, `tr`
 - **Email Delivery**: `curl` (for Mailjet API)
 - **System Info**: `top`, `free`, `df`, `uptime`, `lscpu`
 
 ### Optional Tools
-- `python3` - Enhanced JSON escaping for email (v34)
+- `python3` - Enhanced JSON escaping for email (v34+)
 - `dmidecode` - System hardware information
 - `ip` - Network interface details
 - Additional monitoring tools
@@ -553,7 +577,7 @@ The Proxmox Device Mapper Issue Detector is open source and available on GitHub:
 - Verify Mailjet credentials
 - Check network connectivity
 - Review curl output for API errors
-- Ensure Python3 is installed for better JSON escaping (v34)
+- Ensure Python3 is installed for better JSON escaping (v34+)
 
 ### Cleanup Fails
 - Entry may already be removed
@@ -562,34 +586,41 @@ The Proxmox Device Mapper Issue Detector is open source and available on GitHub:
 
 ### False Positive Duplicates (Fixed in v32/v33)
 - **v31 Bug**: Would flag different storage pools as duplicates
-- **Solution**: Upgrade to v34 which correctly handles multiple storage pools
+- **Solution**: Upgrade to v35 which correctly handles multiple storage pools
 
 ### Empty Storage Pool Names (Fixed in v33)
 - **v32 Bug**: Storage pool extraction regex failed
 - **Solution**: v33+ includes corrected regex for all storage naming formats
 
-### False Positive Tombstones (Fixed in v34)
+### False Positive Tombstones - Storage Pool (Fixed in v34)
 - **v33 Bug**: Would flag legitimate multi-pool configurations as tombstones
 - **Solution**: v34 properly checks storage pool in tombstone detection
 
+### False Positive Tombstones - Case Sensitivity (Fixed in v35)
+- **v34 Bug**: Case-sensitive comparison flagged uppercase storage pools as tombstones
+- **Example**: Config has `T1-HA07`, DM has `t1--ha07` = false tombstone
+- **Solution**: v35 converts storage names to lowercase for comparison
+
 ### Missing NVMe or Multipath Disks (Fixed in v34)
 - **v33 Bug**: Script didn't recognize nvme or mpath disk prefixes
-- **Solution**: v34 includes support for all modern disk types
+- **Solution**: v34+ includes support for all modern disk types
 
 ## Summary
 
-The Proxmox Device Mapper Issue Detector v34 fills a critical gap in Proxmox operations by identifying and resolving device mapper issues that cause VM failures. By correctly detecting only TRUE duplicates and tombstones (with proper storage pool verification), the script helps administrators maintain stable and predictable VM operations without false alarms.
+The Proxmox Device Mapper Issue Detector v35 fills a critical gap in Proxmox operations by identifying and resolving device mapper issues that cause VM failures. By correctly detecting only TRUE duplicates and tombstones (with proper storage pool verification and case-insensitive comparison), the script helps administrators maintain stable and predictable VM operations without false alarms.
 
-**Critical Fixes in v32/v33/v34**:
+**Critical Fixes Summary**:
 - **v32**: Fixed false positive duplicate detection for VMs with disks on multiple storage pools
 - **v33**: Fixed storage pool extraction to correctly parse all naming formats
 - **v34**: Fixed false positive tombstone detection by including storage pool verification
 - **v34**: Added support for modern disk types (nvme, mpath)
+- **v35**: Fixed case sensitivity bug for uppercase storage pool names
 
 The tool is essential for:
 - Clusters with frequent VM migrations
 - Environments with high VM churn
 - Complex VM configurations with multiple storage pools
+- Environments using uppercase storage pool names
 - Modern storage configurations (NVMe, multipath)
 - Recovery from failed operations
 - Preventive maintenance
@@ -600,13 +631,14 @@ Regular use of this script (via cron) provides early warning of developing issue
 **Remember**: 
 - TRUE duplicates (same storage pool) are critical and require immediate attention
 - Different storage pools with same disk number are NORMAL and valid
-- Tombstones must match VM + Storage + Disk to be real issues (v34)
+- Tombstones must match VM + Storage + Disk to be real issues
+- Case differences in storage names are handled correctly in v35
 - The script's priority-based approach ensures the most dangerous issues are addressed first
-- v34 provides the most accurate detection with no known false positives
+- v35 provides the most accurate detection with no known false positives
 
 ## License
 
 This project is licensed under the MIT License. See the [LICENSE](https://github.com/keithrlucier/proxmox-dm-health-check/blob/main/LICENSE) file for details.
 
 ---
-**End of Documentation v34**
+**End of Documentation v35**
