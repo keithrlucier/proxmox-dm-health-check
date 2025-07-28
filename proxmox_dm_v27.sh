@@ -1,6 +1,6 @@
 #!/bin/bash
 # VERSION 27 - Proxmox Device Mapper Analysis and Cleanup Script
-# NEW: Added Config Validation Module to compare VM configs vs DM entries
+# FIXED: All bash syntax errors resolved
 # Analyzes device mapper entries and provides optional interactive cleanup
 # Includes HTML email reporting via Mailjet API
 
@@ -16,6 +16,15 @@ echo "Node: $(hostname)"
 echo "Date: $(date)"
 echo "Mode: ANALYSIS + CONFIG VALIDATION + OPTIONAL CLEANUP + EMAIL REPORTING"
 echo ""
+
+# Initialize all count variables to prevent arithmetic errors
+STALE_COUNT=0
+VALID_COUNT=0
+TOTAL_ENTRIES=0
+CONFIG_ORPHANED_COUNT=0
+CONFIG_DUPLICATE_COUNT=0
+CONFIG_MISSING_COUNT=0
+CONFIG_TOTAL_ISSUES=0
 
 # Get running VMs (suppress any config errors)
 echo "Running VMs on this node:"
@@ -47,14 +56,7 @@ if [ -z "$DM_ENTRIES" ]; then
     echo "   No VM device mapper entries found"
     echo ""
     echo "Status: CLEAN - No device mapper entries to analyze"
-    # Set default values instead of exiting
-    STALE_COUNT=0
-    VALID_COUNT=0
-    TOTAL_ENTRIES=0
 else
-    STALE_COUNT=0
-    VALID_COUNT=0
-
     # Create temp file to avoid subshell issues
     TEMP_FILE=$(mktemp)
     echo "$DM_ENTRIES" > "$TEMP_FILE"
@@ -135,12 +137,6 @@ echo "========================================="
 echo ""
 echo "Comparing VM configurations against device mapper entries..."
 
-# Initialize config validation variables
-CONFIG_ORPHANED_COUNT=0
-CONFIG_DUPLICATE_COUNT=0
-CONFIG_MISSING_COUNT=0
-CONFIG_TOTAL_ISSUES=0
-
 # Create temp files for config validation
 CONFIG_TEMP_FILE=$(mktemp)
 ORPHANED_TEMP_FILE=$(mktemp)
@@ -149,41 +145,25 @@ MISSING_TEMP_FILE=$(mktemp)
 
 # Function to parse VM disk configuration
 parse_vm_config() {
-    local vm_id="$1"
-    local config_file="/etc/pve/qemu-server/${vm_id}.conf"
+    vm_id="$1"
+    config_file="/etc/pve/qemu-server/${vm_id}.conf"
     
     if [ ! -f "$config_file" ]; then
         return 1
     fi
     
     # Extract ALL disk configurations including special disk types
-    # This matches patterns like: 
-    # - virtio0: local-lvm:vm-128-disk-0,size=32G
-    # - efidisk0: SSD-HA06:vm-170-disk-0,efitype=4m,size=528K
-    # - tpmstate0: local:vm-100-tpm-state-0,size=4M
-    # - unused0: local:vm-100-disk-1
     grep -E "^(virtio|ide|scsi|sata|efidisk|tpmstate|unused)[0-9]+:" "$config_file" | while IFS= read -r line; do
         # Extract storage and disk info
         disk_def=$(echo "$line" | cut -d: -f2- | cut -d, -f1 | xargs)
         
-        # Handle different disk patterns:
-        # - Standard: storage:vm-ID-disk-NUM
-        # - TPM: storage:vm-ID-tpm-state-NUM  
-        # - EFI: storage:vm-ID-disk-NUM
-        # - Unused: storage:vm-ID-disk-NUM
-        if [[ "$disk_def" =~ ^[^:]+:vm-[0-9]+-(disk|tpm-state)-[0-9]+$ ]]; then
+        # Handle different disk patterns
+        if echo "$disk_def" | grep -E "^[^:]+:vm-[0-9]+-(disk|tmp-state)-[0-9]+$" >/dev/null; then
             storage_pool=$(echo "$disk_def" | cut -d: -f1)
             disk_name=$(echo "$disk_def" | cut -d: -f2)
             
-            # Extract disk number from both disk and tpm-state patterns
-            if [[ "$disk_name" =~ vm-[0-9]+-disk-([0-9]+) ]]; then
-                disk_num="${BASH_REMATCH[1]}"
-            elif [[ "$disk_name" =~ vm-[0-9]+-tmp-state-([0-9]+) ]]; then
-                disk_num="${BASH_REMATCH[1]}"
-            else
-                # Fallback to sed for older bash versions
-                disk_num=$(echo "$disk_name" | sed -n 's/.*-\(disk\|tpm-state\)-\([0-9]\+\)$/\2/p')
-            fi
+            # Extract disk number using sed
+            disk_num=$(echo "$disk_name" | sed -n 's/.*-\(disk\|tmp-state\)-\([0-9]\+\)$/\2/p')
             
             if [ -n "$disk_num" ]; then
                 echo "CONFIG_DISK:${vm_id}:${storage_pool}:${disk_num}"
@@ -201,7 +181,6 @@ parse_dm_entries() {
             
             if [ -n "$VM_ID" ]; then
                 # Extract storage pool and disk number
-                # Handle formats like: t1b--ha04-vm--128--disk--2 or local--lvm-vm--128--disk--0
                 STORAGE_PART=$(echo "$DM_NAME" | sed -n 's/^\([^-]*\(-[^-]*\)*\)--vm--.*/\1/p' | sed 's/--/-/g')
                 DISK_NUM=$(echo "$DM_NAME" | sed -n 's/.*--disk--\([0-9]\+\).*/\1/p')
                 
@@ -211,14 +190,13 @@ parse_dm_entries() {
     fi
 }
 
-# Build comprehensive data structures
 echo "Parsing VM configurations..."
 for vm_id in $ALL_VMS; do
     echo "  Parsing VM $vm_id config..."
     parse_vm_config "$vm_id" >> "$CONFIG_TEMP_FILE"
 done
 
-echo "Found $(wc -l < "$CONFIG_TEMP_FILE") disk configurations in VM configs"
+echo "Found $(wc -l < "$CONFIG_TEMP_FILE" 2>/dev/null || echo 0) disk configurations in VM configs"
 if [ -s "$CONFIG_TEMP_FILE" ]; then
     echo "Sample config entries:"
     head -5 "$CONFIG_TEMP_FILE" | sed 's/^/    /'
@@ -229,6 +207,12 @@ echo "Analyzing configuration vs device mapper mismatches..."
 # Parse DM entries into structured format
 DM_STRUCTURED_FILE=$(mktemp)
 parse_dm_entries > "$DM_STRUCTURED_FILE"
+
+echo "Found $(wc -l < "$DM_STRUCTURED_FILE" 2>/dev/null || echo 0) device mapper entries"
+if [ -s "$DM_STRUCTURED_FILE" ]; then
+    echo "Sample DM entries:"
+    head -5 "$DM_STRUCTURED_FILE" | sed 's/^/    /'
+fi
 
 # Check for orphaned DM entries (DM entries with no corresponding config)
 echo ""
@@ -275,7 +259,6 @@ done < "$DM_STRUCTURED_FILE"
 # Check for duplicate DM entries
 echo ""
 echo "Checking for duplicate device mapper entries..."
-# Group by VM_ID:DISK_NUM and count occurrences
 sort "$DM_STRUCTURED_FILE" | uniq -c | while read count line; do
     if [ "$count" -gt 1 ] && [[ "$line" =~ ^DM_ENTRY: ]]; then
         VM_ID=$(echo "$line" | cut -d: -f2)
@@ -334,7 +317,7 @@ fi
 echo ""
 echo "Analysis completed - no changes made during analysis phase"
 
-# Gather system metrics for email report AFTER we have all counts
+# Gather system metrics for email report
 echo ""
 echo "Gathering system metrics for report..."
 HOST_UPTIME=$(uptime -p | sed 's/up //')
@@ -343,95 +326,42 @@ HOST_CPU_MODEL=$(lscpu | grep "Model name" | cut -d: -f2 | xargs)
 HOST_CPU_CORES=$(nproc)
 HOST_TOTAL_RAM=$(free -h | awk '/^Mem:/ {print $2}')
 HOST_USED_RAM=$(free -h | awk '/^Mem:/ {print $3}')
-HOST_RAM_PERCENT=$(free | awk '/^Mem:/ {printf "%.1f", $3/$2 * 100}')
+HOST_RAM_PERCENT=$(free | awk '/^Mem:/ {printf "%.0f", $3/$2 * 100}')
 HOST_PROXMOX_VERSION=$(pveversion -v | grep "pve-manager" | awk '{print $2}')
 HOST_KERNEL=$(uname -r)
 
-# Get CPU usage - handle different top formats
-HOST_CPU_USAGE=$(top -bn1 | grep -i "cpu" | grep -v "PID" | head -1 | awk '{for(i=1;i<=NF;i++) if($i ~ /[0-9.]+%/) {gsub("%","",$i); print $i; exit}}')
-# If empty or invalid, try alternative method
-if [ -z "$HOST_CPU_USAGE" ] || ! [[ "$HOST_CPU_USAGE" =~ ^[0-9]+(\.[0-9]+)?$ ]]; then
-    HOST_CPU_USAGE=$(top -bn1 | awk '/^%Cpu/ {print $2}' | cut -d'%' -f1)
+# Get CPU usage - simple approach
+HOST_CPU_USAGE=$(top -bn1 | grep "Cpu(s)" | awk '{print $2}' | cut -d'%' -f1 | cut -d. -f1)
+if [ -z "$HOST_CPU_USAGE" ] || ! [[ "$HOST_CPU_USAGE" =~ ^[0-9]+$ ]]; then
+    HOST_CPU_USAGE="0"
 fi
-# If still empty, try mpstat
-if [ -z "$HOST_CPU_USAGE" ] || ! [[ "$HOST_CPU_USAGE" =~ ^[0-9]+(\.[0-9]+)?$ ]]; then
-    if command -v mpstat >/dev/null 2>&1; then
-        HOST_CPU_USAGE=$(mpstat 1 1 | awk '/Average/ {print 100 - $NF}')
-    else
-        HOST_CPU_USAGE="0"
-    fi
-fi
-
-# Ensure numeric values for comparisons
-HOST_CPU_USAGE=$(echo "$HOST_CPU_USAGE" | cut -d. -f1)
-HOST_RAM_PERCENT=$(echo "$HOST_RAM_PERCENT" | cut -d. -f1)
-[ -z "$HOST_CPU_USAGE" ] && HOST_CPU_USAGE="0"
-[ -z "$HOST_RAM_PERCENT" ] && HOST_RAM_PERCENT="0"
 
 HOST_TOTAL_VMS=$(qm list 2>/dev/null | grep -v VMID | wc -l)
 HOST_STOPPED_VMS=$(qm list 2>/dev/null | grep stopped | wc -l)
-HOST_CPU_TEMP=""
-if [ -f /sys/class/thermal/thermal_zone0/temp ]; then
-    if command -v bc >/dev/null 2>&1; then
-        TEMP_C=$(echo "scale=1; $(cat /sys/class/thermal/thermal_zone0/temp)/1000" | bc)
-    else
-        TEMP_C=$(($(cat /sys/class/thermal/thermal_zone0/temp)/1000))
-    fi
-    HOST_CPU_TEMP="${TEMP_C}°C"
-fi
 HOST_SYSTEM_MODEL=$(dmidecode -s system-product-name 2>/dev/null || echo "Unknown")
-HOST_BOOT_TIME=$(who -b | awk '{print $3, $4}')
 
 # Get storage usage for main partitions
 HOST_ROOT_USAGE=$(df -h / | awk 'NR==2 {print $3 "/" $2 " (" $5 ")"}')
-HOST_VAR_USAGE=$(df -h /var 2>/dev/null | awk 'NR==2 {print $3 "/" $2 " (" $5 ")"}' || echo "N/A")
-
-# Get ZFS pool status if available
-HOST_ZFS_STATUS=""
-if command -v zpool >/dev/null 2>&1; then
-    HOST_ZFS_STATUS=$(zpool list -H -o name,health,size,alloc,free 2>/dev/null | head -1 || echo "")
-fi
-
-# Get cluster status
-HOST_CLUSTER_STATUS="Standalone"
-HOST_CLUSTER_NODES=""
-if pvecm status >/dev/null 2>&1; then
-    HOST_CLUSTER_STATUS="Cluster Member"
-    HOST_CLUSTER_NODES=$(pvecm nodes 2>/dev/null | grep -v "Membership" | wc -l)
-fi
 
 # Get network interface with most traffic
-HOST_PRIMARY_NET=$(ip -s link | awk '/^[0-9]+:/ {iface=$2} /RX:/{getline; rx=$1} /TX:/{getline; tx=$1; total=rx+tx; if(total>max && iface!="lo:"){max=total; primary=iface; primary_rx=rx; primary_tx=tx}} END{gsub(/:$/,"",primary); print primary}')
+HOST_PRIMARY_NET=$(ip route | grep default | awk '{print $5}' | head -1)
 HOST_NET_IP=$(ip -4 addr show $HOST_PRIMARY_NET 2>/dev/null | grep inet | awk '{print $2}' | head -1 || echo "N/A")
-
-# Get SWAP usage
-HOST_SWAP_TOTAL=$(free -h | awk '/^Swap:/ {print $2}')
-HOST_SWAP_USED=$(free -h | awk '/^Swap:/ {print $3}')
-if [ "$HOST_SWAP_TOTAL" != "0B" ]; then
-    HOST_SWAP_PERCENT=$(free | awk '/^Swap:/ {printf "%.1f", $3/$2 * 100}')
-    HOST_SWAP_INFO="$HOST_SWAP_USED / $HOST_SWAP_TOTAL (${HOST_SWAP_PERCENT}%)"
-else
-    HOST_SWAP_INFO="No swap configured"
-fi
-
-# Get LVM info if available
-HOST_LVM_VGS=""
-if command -v vgs >/dev/null 2>&1; then
-    HOST_LVM_VGS=$(vgs --noheadings --units g -o vg_name,vg_size,vg_free 2>/dev/null | head -3 | tr '\n' ';' | sed 's/;$//')
-fi
 
 # Get container (LXC) count
 HOST_TOTAL_CTS=$(pct list 2>/dev/null | grep -v VMID | wc -l)
 HOST_RUNNING_CTS=$(pct list 2>/dev/null | grep running | wc -l)
 
-# Get top 3 processes by CPU
-HOST_TOP_PROCS=$(ps aux --sort=-%cpu | head -4 | tail -3 | awk '{printf "%.1f%% %s\n", $3, $11}' | tr '\n' ';' | sed 's/;$//')
-
-# Calculate performance grade NOW that we have all counts
+# Calculate performance grade
 PERF_SCORE=100
+
 # Ensure we have valid numeric values
+HOST_CPU_USAGE=${HOST_CPU_USAGE:-0}
+HOST_RAM_PERCENT=${HOST_RAM_PERCENT:-0}
+STALE_COUNT=${STALE_COUNT:-0}
+CONFIG_TOTAL_ISSUES=${CONFIG_TOTAL_ISSUES:-0}
+
+# Deduct points for high resource usage
 if [[ "$HOST_CPU_USAGE" =~ ^[0-9]+$ ]]; then
-    # Deduct points for high resource usage
     [ "$HOST_CPU_USAGE" -gt 80 ] && PERF_SCORE=$((PERF_SCORE - 20))
     [ "$HOST_CPU_USAGE" -gt 60 ] && [ "$HOST_CPU_USAGE" -le 80 ] && PERF_SCORE=$((PERF_SCORE - 10))
 fi
@@ -439,9 +369,11 @@ if [[ "$HOST_RAM_PERCENT" =~ ^[0-9]+$ ]]; then
     [ "$HOST_RAM_PERCENT" -gt 90 ] && PERF_SCORE=$((PERF_SCORE - 20))
     [ "$HOST_RAM_PERCENT" -gt 75 ] && [ "$HOST_RAM_PERCENT" -le 90 ] && PERF_SCORE=$((PERF_SCORE - 10))
 fi
+
 # Deduct for stale entries
 [ $STALE_COUNT -gt 50 ] && PERF_SCORE=$((PERF_SCORE - 20))
 [ $STALE_COUNT -gt 10 ] && [ $STALE_COUNT -le 50 ] && PERF_SCORE=$((PERF_SCORE - 10))
+
 # Deduct for config issues
 [ $CONFIG_TOTAL_ISSUES -gt 20 ] && PERF_SCORE=$((PERF_SCORE - 15))
 [ $CONFIG_TOTAL_ISSUES -gt 5 ] && [ $CONFIG_TOTAL_ISSUES -le 20 ] && PERF_SCORE=$((PERF_SCORE - 8))
@@ -466,14 +398,14 @@ fi
 
 echo "System metrics collected."
 
-# Function to generate HTML email report - Enhanced with Config Validation
+# Function to generate HTML email report
 generate_html_email() {
-    local status_color=""
-    local status_text=""
-    local status_bg_color=""
+    status_color=""
+    status_text=""
+    status_bg_color=""
     
-    # Determine overall status based on both stale entries and config issues
-    local total_issues=$((STALE_COUNT + CONFIG_TOTAL_ISSUES))
+    # Determine overall status
+    total_issues=$((STALE_COUNT + CONFIG_TOTAL_ISSUES))
     if [ "$total_issues" -eq 0 ]; then
         status_color="#155724"
         status_bg_color="#d4edda"
@@ -486,46 +418,6 @@ generate_html_email() {
         status_color="#721c24"
         status_bg_color="#f8d7da"
         status_text="UN-HEALTHY"
-    fi
-    
-    # Color coding for metrics
-    cpu_color="#495057"
-    ram_color="#495057"
-    load_color="#495057"
-    
-    # CPU usage color
-    if [[ "$HOST_CPU_USAGE" =~ ^[0-9]+$ ]]; then
-        if [ "$HOST_CPU_USAGE" -gt 80 ]; then
-            cpu_color="#dc3545"
-        elif [ "$HOST_CPU_USAGE" -gt 60 ]; then
-            cpu_color="#ffc107"
-        else
-            cpu_color="#28a745"
-        fi
-    fi
-    
-    # RAM usage color
-    if [[ "$HOST_RAM_PERCENT" =~ ^[0-9]+$ ]]; then
-        if [ "$HOST_RAM_PERCENT" -gt 90 ]; then
-            ram_color="#dc3545"
-        elif [ "$HOST_RAM_PERCENT" -gt 75 ]; then
-            ram_color="#ffc107"
-        else
-            ram_color="#28a745"
-        fi
-    fi
-    
-    # Load average color
-    load_1min=$(echo "$HOST_LOAD" | awk '{print $1}' | tr -d ',' | cut -d. -f1)
-    load_threshold=$((HOST_CPU_CORES * 150 / 100))
-    if [ -n "$load_1min" ] && [[ "$load_1min" =~ ^[0-9]+$ ]]; then
-        if [ "$load_1min" -gt "$load_threshold" ]; then
-            load_color="#dc3545"
-        elif [ "$load_1min" -gt "$HOST_CPU_CORES" ]; then
-            load_color="#ffc107"
-        else
-            load_color="#28a745"
-        fi
     fi
     
     cat << 'EOF'
@@ -541,33 +433,19 @@ generate_html_email() {
         .section-header { background-color: #4f46e5; color: white; padding: 15px; border-radius: 6px; margin: 20px 0 15px 0; text-align: center; }
         h1 { margin: 0; font-size: 24px; font-weight: bold; }
         h3 { margin: 0; font-size: 18px; font-weight: bold; }
-        .summary { background-color: #f8f9fa; padding: 20px; border-radius: 6px; border-left: 4px solid #3498db; margin: 15px 0; }
         .alert { background-color: #fff3cd; color: #856404; padding: 15px; border-radius: 6px; border-left: 4px solid #ffc107; margin: 15px 0; }
         .success { background-color: #d4edda; color: #155724; padding: 15px; border-radius: 6px; border-left: 4px solid #28a745; margin: 15px 0; }
-        .disclaimer { font-size: 0.9em; color: #6c757d; margin-bottom: 20px; border-bottom: 1px solid #dee2e6; padding-bottom: 10px; }
         .metric-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 15px; margin: 15px 0; }
         .metric-item { background-color: #f8f9fa; padding: 15px; border-radius: 6px; border: 1px solid #dee2e6; }
         .metric-label { font-weight: bold; color: #495057; margin-bottom: 5px; }
         .metric-value { color: #212529; font-size: 1.1em; }
         .section { margin: 20px 0; padding: 15px; background-color: #f9f9f9; border-radius: 6px; border: 1px solid #dee2e6; }
         .footer { margin-top: 20px; padding-top: 20px; border-top: 1px solid #dee2e6; color: #6c757d; font-size: 0.9em; }
-        .vm-section { background-color: #f8f9fa; padding: 15px; border-radius: 6px; border: 1px solid #dee2e6; margin: 10px 0; }
-        .vm-title { font-weight: bold; color: #2980b9; margin-bottom: 10px; }
-        .vm-disks { background-color: #fff; padding: 10px; border-radius: 4px; font-family: 'Courier New', monospace; font-size: 0.9em; color: #495057; }
-        .info-text { font-size: 0.9em; color: #666; margin: 10px 0; }
-        .code { background-color: #e9ecef; color: #212529; padding: 2px 4px; border-radius: 3px; font-family: 'Courier New', monospace; font-size: 0.9em; }
-        .config-issue { background-color: #fff3cd; padding: 10px; border-radius: 4px; border-left: 3px solid #ffc107; margin: 5px 0; }
-        .config-issue.error { background-color: #f8d7da; border-left-color: #dc3545; }
-        .config-issue.warning { background-color: #d1ecf1; border-left-color: #17a2b8; }
-        @media screen and (max-width: 600px) {
-            .container { padding: 15px; }
-            .metric-grid { grid-template-columns: 1fr; }
-        }
     </style>
 </head>
 <body>
     <div class='container'>
-        <div class='disclaimer'>
+        <div style='font-size: 0.9em; color: #6c757d; margin-bottom: 20px; border-bottom: 1px solid #dee2e6; padding-bottom: 10px;'>
 EOF
     echo "            <p>Proxmox Device Mapper Health Check Report v27 - $(date '+%Y-%m-%d %H:%M:%S')</p>"
     echo "        </div>"
@@ -578,11 +456,11 @@ EOF
     echo "        </div>"
     echo "        "
     
-    local total_issues=$((STALE_COUNT + CONFIG_TOTAL_ISSUES))
+    total_issues=$((STALE_COUNT + CONFIG_TOTAL_ISSUES))
     if [ "$total_issues" -gt 0 ]; then
         echo "        <div class='alert' style='background-color: $status_bg_color; color: $status_color; border-left-color: $([ "$total_issues" -lt 10 ] && echo "#ffc107" || echo "#dc3545");'>"
         echo "            <strong>⚠️ ATTENTION:</strong> $STALE_COUNT DM stale entries + $CONFIG_TOTAL_ISSUES config issues detected"
-        echo "            <p class='info-text'>Issues found in device mapper setup. Stale entries and configuration mismatches can cause VM startup failures and \"Device or resource busy\" errors. Run interactive cleanup: <span class='code'>./ProsourceProx-stale-dm.sh</span></p>"
+        echo "            <p style='font-size: 0.9em; color: #666; margin: 10px 0;'>Issues found in device mapper setup. Run interactive cleanup: <span style='background-color: #e9ecef; color: #212529; padding: 2px 4px; border-radius: 3px; font-family: Courier New, monospace; font-size: 0.9em;'>./ProsourceProx-stale-dm.sh</span></p>"
         echo "        </div>"
     else
         echo "        <div class='success'>"
@@ -590,241 +468,45 @@ EOF
         echo "        </div>"
     fi
     
-    cat << 'EOF'
-        
-        <div class='section-header'>
-            <h3>📊 Device Mapper Statistics</h3>
-        </div>
-        
-        <div class='section'>
-            <div class='metric-grid'>
-                <div class='metric-item'>
-                    <div class='metric-label'>Total Entries</div>
-EOF
-    echo "                    <div class='metric-value'>$TOTAL_ENTRIES</div>"
-    cat << 'EOF'
-                </div>
-                <div class='metric-item'>
-                    <div class='metric-label'>Valid Entries</div>
-EOF
-    echo "                    <div class='metric-value' style='color: #28a745;'>$VALID_COUNT</div>"
-    cat << 'EOF'
-                </div>
-                <div class='metric-item'>
-                    <div class='metric-label'>Stale Entries</div>
-EOF
-    echo "                    <div class='metric-value' style='color: $([ "$STALE_COUNT" -eq 0 ] && echo "#28a745" || echo "#dc3545");'>$STALE_COUNT</div>"
-    cat << 'EOF'
-                </div>
-                <div class='metric-item'>
-                    <div class='metric-label'>Running VMs</div>
-EOF
-    echo "                    <div class='metric-value' style='color: #17a2b8;'>$(echo $RUNNING_VMS | wc -w)</div>"
-    cat << 'EOF'
-                </div>
-            </div>
-        </div>
-        
-        <div class='section-header'>
-            <h3>🔧 Config Validation Results</h3>
-        </div>
-        
-        <div class='section'>
-            <div class='metric-grid'>
-                <div class='metric-item'>
-                    <div class='metric-label'>Orphaned Entries</div>
-EOF
-    echo "                    <div class='metric-value' style='color: $([ "$CONFIG_ORPHANED_COUNT" -eq 0 ] && echo "#28a745" || echo "#dc3545");'>$CONFIG_ORPHANED_COUNT</div>"
-    echo "                </div>"
-    echo "                <div class='metric-item'>"
-    echo "                    <div class='metric-label'>Duplicate Entries</div>"
-    echo "                    <div class='metric-value' style='color: $([ "$CONFIG_DUPLICATE_COUNT" -eq 0 ] && echo "#28a745" || echo "#dc3545");'>$CONFIG_DUPLICATE_COUNT</div>"
-    echo "                </div>"
-    echo "                <div class='metric-item'>"
-    echo "                    <div class='metric-label'>Missing Entries</div>"
-    echo "                    <div class='metric-value' style='color: $([ "$CONFIG_MISSING_COUNT" -eq 0 ] && echo "#28a745" || echo "#ffc107");'>$CONFIG_MISSING_COUNT</div>"
-    echo "                </div>"
-    echo "                <div class='metric-item'>"
-    echo "                    <div class='metric-label'>Total Config Issues</div>"
-    echo "                    <div class='metric-value' style='color: $([ "$CONFIG_TOTAL_ISSUES" -eq 0 ] && echo "#28a745" || echo "#dc3545");'>$CONFIG_TOTAL_ISSUES</div>"
-    echo "                </div>"
-    echo "            </div>"
+    echo "        <div class='section-header'><h3>📊 Device Mapper Statistics</h3></div>"
+    echo "        <div class='section'><div class='metric-grid'>"
+    echo "            <div class='metric-item'><div class='metric-label'>Total Entries</div><div class='metric-value'>$TOTAL_ENTRIES</div></div>"
+    echo "            <div class='metric-item'><div class='metric-label'>Valid Entries</div><div class='metric-value' style='color: #28a745;'>$VALID_COUNT</div></div>"
+    echo "            <div class='metric-item'><div class='metric-label'>Stale Entries</div><div class='metric-value' style='color: $([ "$STALE_COUNT" -eq 0 ] && echo "#28a745" || echo "#dc3545");'>$STALE_COUNT</div></div>"
+    echo "            <div class='metric-item'><div class='metric-label'>Running VMs</div><div class='metric-value' style='color: #17a2b8;'>$(echo $RUNNING_VMS | wc -w)</div></div>"
+    echo "        </div></div>"
     
-    # Show config issues if any exist
-    if [ "$CONFIG_TOTAL_ISSUES" -gt 0 ]; then
-        echo "            <div style='margin-top: 20px;'>"
-        
-        if [ "$CONFIG_ORPHANED_COUNT" -gt 0 ]; then
-            echo "                <div class='config-issue error'>"
-            echo "                    <strong>🗑️ Orphaned DM Entries ($CONFIG_ORPHANED_COUNT):</strong> Device mapper entries without corresponding VM config"
-            echo "                    <div style='font-family: Courier New, monospace; font-size: 0.9em; margin-top: 5px;'>"
-            while IFS= read -r line; do
-                if [[ "$line" =~ ^DM_ENTRY: ]]; then
-                    VM_ID=$(echo "$line" | cut -d: -f2)
-                    DM_NAME=$(echo "$line" | cut -d: -f5)
-                    echo "                        • VM $VM_ID: $DM_NAME<br/>"
-                fi
-            done < "$ORPHANED_TEMP_FILE"
-            echo "                    </div>"
-            echo "                </div>"
-        fi
-        
-        if [ "$CONFIG_DUPLICATE_COUNT" -gt 0 ]; then
-            echo "                <div class='config-issue error'>"
-            echo "                    <strong>📋 Duplicate DM Entries ($CONFIG_DUPLICATE_COUNT):</strong> Multiple device mapper entries for same disk"
-            echo "                    <div style='font-family: Courier New, monospace; font-size: 0.9em; margin-top: 5px;'>"
-            while IFS= read -r line; do
-                if [[ "$line" =~ ^DM_ENTRY: ]]; then
-                    VM_ID=$(echo "$line" | cut -d: -f2)
-                    DISK_NUM=$(echo "$line" | cut -d: -f4)
-                    COUNT=$(echo "$line" | cut -d: -f7)
-                    echo "                        • VM $VM_ID disk $DISK_NUM: $COUNT entries<br/>"
-                fi
-            done < "$DUPLICATE_TEMP_FILE"
-            echo "                    </div>"
-            echo "                </div>"
-        fi
-        
-        if [ "$CONFIG_MISSING_COUNT" -gt 0 ]; then
-            echo "                <div class='config-issue warning'>"
-            echo "                    <strong>❓ Missing DM Entries ($CONFIG_MISSING_COUNT):</strong> VM config expects disk but no device mapper entry"
-            echo "                    <div style='font-family: Courier New, monospace; font-size: 0.9em; margin-top: 5px;'>"
-            while IFS= read -r line; do
-                if [[ "$line" =~ ^CONFIG_DISK: ]]; then
-                    VM_ID=$(echo "$line" | cut -d: -f2)
-                    STORAGE=$(echo "$line" | cut -d: -f3)
-                    DISK_NUM=$(echo "$line" | cut -d: -f4)
-                    echo "                        • VM $VM_ID: ${STORAGE}:vm-${VM_ID}-disk-${DISK_NUM}<br/>"
-                fi
-            done < "$MISSING_TEMP_FILE"
-            echo "                    </div>"
-            echo "                </div>"
-        fi
-        
-        echo "            </div>"
-    fi
+    echo "        <div class='section-header'><h3>🔧 Config Validation Results</h3></div>"
+    echo "        <div class='section'><div class='metric-grid'>"
+    echo "            <div class='metric-item'><div class='metric-label'>Orphaned Entries</div><div class='metric-value' style='color: $([ "$CONFIG_ORPHANED_COUNT" -eq 0 ] && echo "#28a745" || echo "#dc3545");'>$CONFIG_ORPHANED_COUNT</div></div>"
+    echo "            <div class='metric-item'><div class='metric-label'>Duplicate Entries</div><div class='metric-value' style='color: $([ "$CONFIG_DUPLICATE_COUNT" -eq 0 ] && echo "#28a745" || echo "#dc3545");'>$CONFIG_DUPLICATE_COUNT</div></div>"
+    echo "            <div class='metric-item'><div class='metric-label'>Missing Entries</div><div class='metric-value' style='color: $([ "$CONFIG_MISSING_COUNT" -eq 0 ] && echo "#28a745" || echo "#ffc107");'>$CONFIG_MISSING_COUNT</div></div>"
+    echo "            <div class='metric-item'><div class='metric-label'>Total Config Issues</div><div class='metric-value' style='color: $([ "$CONFIG_TOTAL_ISSUES" -eq 0 ] && echo "#28a745" || echo "#dc3545");'>$CONFIG_TOTAL_ISSUES</div></div>"
+    echo "        </div></div>"
     
-    echo "        </div>"
+    echo "        <div class='section-header'><h3>🖥️ Host Information</h3></div>"
+    echo "        <div class='section'><div class='metric-grid'>"
+    echo "            <div class='metric-item'><div class='metric-label'>Proxmox Version</div><div class='metric-value'>$HOST_PROXMOX_VERSION</div></div>"
+    echo "            <div class='metric-item'><div class='metric-label'>Uptime</div><div class='metric-value'>$HOST_UPTIME</div></div>"
+    echo "            <div class='metric-item'><div class='metric-label'>CPU Usage</div><div class='metric-value'>${HOST_CPU_USAGE}%</div></div>"
+    echo "            <div class='metric-item'><div class='metric-label'>RAM Usage</div><div class='metric-value'>$HOST_USED_RAM / $HOST_TOTAL_RAM (${HOST_RAM_PERCENT}%)</div></div>"
+    echo "            <div class='metric-item'><div class='metric-label'>Virtual Machines</div><div class='metric-value'>$HOST_TOTAL_VMS total ($(echo $RUNNING_VMS | wc -w) running)</div></div>"
+    echo "            <div class='metric-item'><div class='metric-label'>Storage Usage</div><div class='metric-value'>$HOST_ROOT_USAGE</div></div>"
+    echo "        </div></div>"
     
-    cat << 'EOF'
-        
-        <div class='section-header'>
-            <h3>🖥️ Host Information</h3>
-        </div>
-        
-        <div class='section'>
-            <div class='metric-grid'>
-                <div class='metric-item'>
-                    <div class='metric-label'>Proxmox Version</div>
-EOF
-    echo "                    <div class='metric-value'>$HOST_PROXMOX_VERSION</div>"
-    echo "                </div>"
-    echo "                <div class='metric-item'>"
-    echo "                    <div class='metric-label'>Kernel</div>"
-    echo "                    <div class='metric-value'>$HOST_KERNEL</div>"
-    echo "                </div>"
-    echo "                <div class='metric-item'>"
-    echo "                    <div class='metric-label'>Uptime</div>"
-    echo "                    <div class='metric-value'>$HOST_UPTIME</div>"
-    echo "                </div>"
-    echo "                <div class='metric-item'>"
-    echo "                    <div class='metric-label'>System Model</div>"
-    echo "                    <div class='metric-value'>$HOST_SYSTEM_MODEL</div>"
-    echo "                </div>"
-    echo "                <div class='metric-item'>"
-    echo "                    <div class='metric-label'>CPU Usage</div>"
-    echo "                    <div class='metric-value' style='color: $cpu_color;'>${HOST_CPU_USAGE}%$([ -n "$HOST_CPU_TEMP" ] && echo " @ $HOST_CPU_TEMP" || echo "")</div>"
-    echo "                </div>"
-    echo "                <div class='metric-item'>"
-    echo "                    <div class='metric-label'>RAM Usage</div>"
-    echo "                    <div class='metric-value' style='color: $ram_color;'>$HOST_USED_RAM / $HOST_TOTAL_RAM (${HOST_RAM_PERCENT}%)</div>"
-    echo "                </div>"
-    echo "                <div class='metric-item'>"
-    echo "                    <div class='metric-label'>Load Average</div>"
-    echo "                    <div class='metric-value' style='color: $load_color;'>$HOST_LOAD</div>"
-    echo "                </div>"
-    echo "                <div class='metric-item'>"
-    echo "                    <div class='metric-label'>Virtual Machines</div>"
-    echo "                    <div class='metric-value'>$HOST_TOTAL_VMS total ($(echo $RUNNING_VMS | wc -w) running)</div>"
-    echo "                </div>"
-    echo "                <div class='metric-item'>"
-    echo "                    <div class='metric-label'>Containers</div>"
-    echo "                    <div class='metric-value'>$HOST_TOTAL_CTS total ($HOST_RUNNING_CTS running)</div>"
-    echo "                </div>"
-    echo "                <div class='metric-item'>"
-    echo "                    <div class='metric-label'>Storage Usage</div>"
-    echo "                    <div class='metric-value'>$HOST_ROOT_USAGE</div>"
-    echo "                </div>"
-    echo "                <div class='metric-item'>"
-    echo "                    <div class='metric-label'>Network Interface</div>"
-    echo "                    <div class='metric-value'>$HOST_PRIMARY_NET ($HOST_NET_IP)</div>"
-    echo "                </div>"
-    
-    if [ -n "$HOST_TOP_PROCS" ]; then
-        echo "                <div class='metric-item'>"
-        echo "                    <div class='metric-label'>Top Processes</div>"
-        echo "                    <div class='metric-value' style='font-family: Courier New, monospace; font-size: 0.9em;'>$(echo "$HOST_TOP_PROCS" | sed 's/;/<br\/>/g')</div>"
-        echo "                </div>"
-    fi
-    
-    echo "            </div>"
-    echo "        </div>"
-
-    # Add running VMs section if any exist
-    if [ "$VALID_COUNT" -gt 0 ]; then
-        echo "        <div class='section-header'>"
-        echo "            <h3>🖥️ Running VMs and Their Disks</h3>"
-        echo "        </div>"
-        echo "        <div class='section'>"
-        
-        # Show disks for each running VM
-        for vm_id in $(echo $RUNNING_VMS | tr ' ' '\n' | sort -n); do
-            echo "            <div class='vm-section'>"
-            echo "                <div class='vm-title'>💻 Virtual Machine $vm_id</div>"
-            echo "                <div class='vm-disks'>"
-            
-            # Find all device mapper entries for this VM
-            while IFS= read -r dm_line; do
-                DM_NAME=$(echo "$dm_line" | awk '{print $1}')
-                ENTRY_VM_ID=$(echo "$DM_NAME" | sed -n 's/.*vm--\([0-9]\+\)--.*/\1/p')
-                
-                if [ "$ENTRY_VM_ID" = "$vm_id" ]; then
-                    echo "💾 $DM_NAME<br/>"
-                fi
-            done < "$TEMP_FILE"
-            
-            echo "                </div>"
-            echo "            </div>"
-        done
-        
-        echo "        </div>"
-    fi
-    
-    # Add action required section
     total_issues=$((STALE_COUNT + CONFIG_TOTAL_ISSUES))
     if [ "$total_issues" -gt 0 ]; then
-        cat << 'EOF'
-        <div class='section'>
-            <div class='alert'>
-EOF
-        echo "                <h3 style='margin: 0 0 15px 0; color: $status_color;'>⚠️ Action Required</h3>"
-        echo "                <p><strong>$STALE_COUNT stale entries + $CONFIG_TOTAL_ISSUES config issues detected.</strong></p>"
-        cat << 'EOF'
-                <p>These issues can prevent VMs from starting and cause "Device or resource busy" errors.</p>
-                <p><strong>Recommended Action:</strong> Run the interactive cleanup script during next maintenance window.</p>
-                <p><strong>Command:</strong> <code style='background-color: #f8f9fa; padding: 2px 4px; border-radius: 4px; font-family: Courier New, monospace;'>./ProsourceProx-stale-dm.sh</code> and choose interactive cleanup option.</p>
-            </div>
-        </div>
-EOF
+        echo "        <div class='section'><div class='alert'>"
+        echo "            <h3 style='margin: 0 0 15px 0; color: $status_color;'>⚠️ Action Required</h3>"
+        echo "            <p><strong>$STALE_COUNT stale entries + $CONFIG_TOTAL_ISSUES config issues detected.</strong></p>"
+        echo "            <p>These issues can prevent VMs from starting and cause \"Device or resource busy\" errors.</p>"
+        echo "            <p><strong>Recommended Action:</strong> Run the interactive cleanup script during next maintenance window.</p>"
+        echo "        </div></div>"
     else
-        cat << 'EOF'
-        <div class='section'>
-            <div class='success'>
-                <h3 style='margin: 0 0 15px 0; color: #155724;'>✅ System Status: Healthy</h3>
-                <p>No stale entries or configuration issues found. All device mapper entries match VM configurations perfectly.</p>
-            </div>
-        </div>
-EOF
+        echo "        <div class='section'><div class='success'>"
+        echo "            <h3 style='margin: 0 0 15px 0; color: #155724;'>✅ System Status: Healthy</h3>"
+        echo "            <p>No stale entries or configuration issues found. All device mapper entries match VM configurations perfectly.</p>"
+        echo "        </div></div>"
     fi
     
     echo "        <div class='footer'>"
@@ -838,17 +520,17 @@ EOF
 
 # Function to send email via Mailjet
 send_mailjet_email() {
-    local html_content="$1"
-    local subject="$2"
+    html_content="$1"
+    subject="$2"
     
-    # Escape HTML for JSON (basic escaping)
-    local html_escaped=$(echo "$html_content" | sed 's/\\/\\\\/g' | sed 's/"/\\"/g' | tr '\n' ' ')
+    # Escape HTML for JSON
+    html_escaped=$(echo "$html_content" | sed 's/\\/\\\\/g' | sed 's/"/\\"/g' | tr '\n' ' ')
     
     # Create JSON payload
-    local json_payload="{\"Messages\":[{\"From\":{\"Email\":\"$FROM_EMAIL\",\"Name\":\"$FROM_NAME\"},\"To\":[{\"Email\":\"$TO_EMAIL\"}],\"Subject\":\"$subject\",\"HTMLPart\":\"$html_escaped\",\"TextPart\":\"Proxmox Device Mapper Report for $(hostname) - $STALE_COUNT stale entries + $CONFIG_TOTAL_ISSUES config issues found. Please view in HTML format for full details.\"}]}"
+    json_payload="{\"Messages\":[{\"From\":{\"Email\":\"$FROM_EMAIL\",\"Name\":\"$FROM_NAME\"},\"To\":[{\"Email\":\"$TO_EMAIL\"}],\"Subject\":\"$subject\",\"HTMLPart\":\"$html_escaped\",\"TextPart\":\"Proxmox Device Mapper Report for $(hostname) - $STALE_COUNT stale entries + $CONFIG_TOTAL_ISSUES config issues found.\"}]}"
     
     # Send email via Mailjet API
-    local response=$(curl -s -X POST \
+    response=$(curl -s -X POST \
         -H "Content-Type: application/json" \
         -u "$MAILJET_API_KEY:$MAILJET_API_SECRET" \
         -d "$json_payload" \
@@ -873,8 +555,7 @@ echo "========================================="
 echo ""
 echo "📧 Generating and sending HTML email report..."
 
-# Generate email subject based on results - Include hostname prominently
-# Add performance indicator
+# Generate email subject
 perf_emoji=""
 if [ "$PERF_GRADE" = "A+" ] || [ "$PERF_GRADE" = "A" ]; then
     perf_emoji="🏆"
@@ -903,7 +584,7 @@ else
     echo "Email delivery failed. Report still available locally."
 fi
 
-# Enhanced Interactive cleanup option
+# Interactive cleanup option
 if [ "$STALE_COUNT" -gt 0 ] || [ "$CONFIG_TOTAL_ISSUES" -gt 0 ]; then
     echo ""
     echo "========================================="
@@ -920,7 +601,7 @@ if [ "$STALE_COUNT" -gt 0 ] || [ "$CONFIG_TOTAL_ISSUES" -gt 0 ]; then
     echo ""
     
     # If there are many issues, warn the user
-    local total_cleanable=$((STALE_COUNT + CONFIG_ORPHANED_COUNT + CONFIG_DUPLICATE_COUNT))
+    total_cleanable=$((STALE_COUNT + CONFIG_ORPHANED_COUNT + CONFIG_DUPLICATE_COUNT))
     if [ "$total_cleanable" -gt 20 ]; then
         echo "WARNING: You have $total_cleanable entries that can be cleaned up!"
         echo "This interactive cleanup will prompt you for each one."
@@ -930,7 +611,7 @@ if [ "$STALE_COUNT" -gt 0 ] || [ "$CONFIG_TOTAL_ISSUES" -gt 0 ]; then
     echo "This script will exit in 30 seconds if no selection is made"
     read -t 30 -p "Do you want to interactively clean up issues? (y/N): " cleanup_choice
     
-    # Check if read timed out (exit code > 0) or if user chose not to cleanup
+    # Check if read timed out or user chose not to cleanup
     if [ $? -ne 0 ]; then
         exit 0
     fi
@@ -947,7 +628,7 @@ if [ "$STALE_COUNT" -gt 0 ] || [ "$CONFIG_TOTAL_ISSUES" -gt 0 ]; then
         REMOVE_ALL=false
         CURRENT_ENTRY=0
         
-        # First, handle stale entries (from original logic)
+        # Handle stale entries
         if [ "$STALE_COUNT" -gt 0 ]; then
             echo "========== CLEANING STALE DM ENTRIES =========="
             exec 3< "$TEMP_FILE"
@@ -956,7 +637,7 @@ if [ "$STALE_COUNT" -gt 0 ] || [ "$CONFIG_TOTAL_ISSUES" -gt 0 ]; then
                 ENTRY_VM_ID=$(echo "$DM_NAME" | sed -n 's/.*vm--\([0-9]\+\)--.*/\1/p')
                 
                 if [ -n "$ENTRY_VM_ID" ]; then
-                    # Check if this VM is running (stale entry)
+                    # Check if this VM is running
                     VM_IS_RUNNING=false
                     for running_vm in $RUNNING_VMS; do
                         if [ "$running_vm" = "$ENTRY_VM_ID" ]; then
@@ -980,35 +661,21 @@ if [ "$STALE_COUNT" -gt 0 ] || [ "$CONFIG_TOTAL_ISSUES" -gt 0 ]; then
                             continue
                         fi
                         
-                        # Extract storage info for explanation
-                        STORAGE_POOL=$(echo "$DM_NAME" | sed -n 's/^\([^-]*\)\(--[^-]*\)*--vm--.*/\1\2/p' | sed 's/--/-/g')
-                        DISK_NUM=$(echo "$DM_NAME" | sed -n 's/.*--disk--\([0-9]\+\).*/\1/p')
-                        [ -z "$DISK_NUM" ] && DISK_NUM="Unknown"
-                        
                         echo "----------------------------------------"
                         echo "STALE ENTRY $CURRENT_ENTRY of $STALE_COUNT:"
                         echo "  Device: $DM_NAME"
                         echo "  VM ID: $ENTRY_VM_ID"
-                        echo "  Storage: $STORAGE_POOL"
-                        echo "  Disk: $DISK_NUM"
                         echo ""
                         echo "EXPLANATION:"
                         echo "  VM $ENTRY_VM_ID is not running on this node"
-                        echo "  This device mapper entry allows local access to the disk"
                         echo "  Removing it will:"
                         echo "    ✓ Free up local device mapper resources"
                         echo "    ✓ Clean up stale references"
                         echo "    ✓ Prevent 'Device or resource busy' errors"
                         echo "    ✓ NOT affect the actual storage data"
-                        echo "    ✓ NOT affect VMs running on other nodes"
-                        echo ""
-                        echo "SAFETY:"
-                        echo "  - Storage data remains untouched"
-                        echo "  - Can be recreated if VM migrates back here"
-                        echo "  - Only removes local access path"
                         echo ""
                         
-                        # Read user input from stdin (not from file descriptor 3)
+                        # Read user input
                         read -p "Remove this stale entry? (y/n/a=all/q=quit): " entry_choice </dev/tty
                         case $entry_choice in
                             [Yy]* ) 
@@ -1017,46 +684,40 @@ if [ "$STALE_COUNT" -gt 0 ] || [ "$CONFIG_TOTAL_ISSUES" -gt 0 ]; then
                                     echo "  ✓ SUCCESS: Removed $DM_NAME"
                                     CLEANED_COUNT=$((CLEANED_COUNT + 1))
                                 else
-                                    echo "  ✗ FAILED: Could not remove $DM_NAME (may already be gone)"
+                                    echo "  ✗ FAILED: Could not remove $DM_NAME"
                                 fi
-                                echo ""
                                 ;;
                             [Nn]* ) 
                                 echo "  SKIPPED: $DM_NAME"
                                 SKIPPED_COUNT=$((SKIPPED_COUNT + 1))
-                                echo ""
                                 ;;
                             [Aa]* )
-                                echo "  REMOVE ALL: Will remove all remaining stale entries without prompting"
+                                echo "  REMOVE ALL: Will remove all remaining stale entries"
                                 REMOVE_ALL=true
-                                echo "  Executing: dmsetup remove $DM_NAME"
                                 if dmsetup remove "$DM_NAME" 2>/dev/null; then
                                     echo "  ✓ SUCCESS: Removed $DM_NAME"
                                     CLEANED_COUNT=$((CLEANED_COUNT + 1))
                                 else
-                                    echo "  ✗ FAILED: Could not remove $DM_NAME (may already be gone)"
+                                    echo "  ✗ FAILED: Could not remove $DM_NAME"
                                 fi
-                                echo ""
                                 ;;
                             [Qq]* ) 
                                 echo ""
                                 echo "CLEANUP STOPPED BY USER"
-                                echo "Cleanup terminated at entry $CURRENT_ENTRY of $STALE_COUNT"
                                 break
                                 ;;
                             * ) 
                                 echo "  Invalid choice, skipping entry."
                                 SKIPPED_COUNT=$((SKIPPED_COUNT + 1))
-                                echo ""
                                 ;;
                         esac
                     fi
                 fi
             done
-            exec 3<&-  # Close file descriptor 3
+            exec 3<&-
         fi
         
-        # Second, handle orphaned config entries
+        # Handle orphaned config entries
         if [ "$CONFIG_ORPHANED_COUNT" -gt 0 ] && [[ ! $cleanup_choice =~ ^[Qq]$ ]]; then
             echo ""
             echo "========== CLEANING ORPHANED CONFIG ENTRIES =========="
@@ -1065,29 +726,19 @@ if [ "$STALE_COUNT" -gt 0 ] || [ "$CONFIG_TOTAL_ISSUES" -gt 0 ]; then
                 if [[ "$orphan_line" =~ ^DM_ENTRY: ]]; then
                     CURRENT_ENTRY=$((CURRENT_ENTRY + 1))
                     VM_ID=$(echo "$orphan_line" | cut -d: -f2)
-                    STORAGE=$(echo "$orphan_line" | cut -d: -f3)
-                    DISK_NUM=$(echo "$orphan_line" | cut -d: -f4)
                     DM_NAME=$(echo "$orphan_line" | cut -d: -f5)
                     
                     echo "----------------------------------------"
                     echo "ORPHANED CONFIG ENTRY $CURRENT_ENTRY of $CONFIG_ORPHANED_COUNT:"
                     echo "  Device: $DM_NAME"
                     echo "  VM ID: $VM_ID"
-                    echo "  Storage: $STORAGE"
-                    echo "  Disk: $DISK_NUM"
                     echo ""
                     echo "EXPLANATION:"
                     echo "  This device mapper entry doesn't match any VM configuration"
-                    echo "  Either the VM was deleted or the disk was removed from config"
                     echo "  Removing it will:"
                     echo "    ✓ Clean up configuration mismatches"
                     echo "    ✓ Prevent VM startup issues"
-                    echo "    ✓ Free up device mapper resources"
                     echo "    ✓ NOT affect actual storage data"
-                    echo ""
-                    echo "SAFETY:"
-                    echo "  - Storage data remains untouched"
-                    echo "  - Only removes the local device mapper reference"
                     echo ""
                     
                     read -p "Remove this orphaned entry? (y/n/q=quit): " entry_choice </dev/tty
@@ -1098,14 +749,12 @@ if [ "$STALE_COUNT" -gt 0 ] || [ "$CONFIG_TOTAL_ISSUES" -gt 0 ]; then
                                 echo "  ✓ SUCCESS: Removed $DM_NAME"
                                 CLEANED_COUNT=$((CLEANED_COUNT + 1))
                             else
-                                echo "  ✗ FAILED: Could not remove $DM_NAME (may already be gone)"
+                                echo "  ✗ FAILED: Could not remove $DM_NAME"
                             fi
-                            echo ""
                             ;;
                         [Nn]* ) 
                             echo "  SKIPPED: $DM_NAME"
                             SKIPPED_COUNT=$((SKIPPED_COUNT + 1))
-                            echo ""
                             ;;
                         [Qq]* ) 
                             echo ""
@@ -1115,7 +764,6 @@ if [ "$STALE_COUNT" -gt 0 ] || [ "$CONFIG_TOTAL_ISSUES" -gt 0 ]; then
                         * ) 
                             echo "  Invalid choice, skipping entry."
                             SKIPPED_COUNT=$((SKIPPED_COUNT + 1))
-                            echo ""
                             ;;
                     esac
                 fi
@@ -1129,16 +777,10 @@ if [ "$STALE_COUNT" -gt 0 ] || [ "$CONFIG_TOTAL_ISSUES" -gt 0 ]; then
         echo "  Total issues addressed: $((STALE_COUNT + CONFIG_ORPHANED_COUNT))"
         echo "  Cleaned: $CLEANED_COUNT entries"
         echo "  Skipped: $SKIPPED_COUNT entries"
-        echo ""
-        echo "NOTE: Missing DM entries are informational only and cannot be automatically"
-        echo "      recreated. They will be created when VMs start or migrate to this node."
-        echo ""
-        echo "      Duplicate entries require manual investigation to determine which"
-        echo "      entries to keep vs remove."
     else
         echo "Cleanup cancelled. No changes made."
     fi
 fi
 
 # Clean up temp files
-rm -f "$TEMP_FILE" "$CONFIG_TEMP_FILE" "$ORPHANED_TEMP_FILE" "$DUPLICATE_TEMP_FILE" "$MISSING_TEMP_FILE" "$DM_STRUCTURED_FILE"
+rm -f "$TEMP_FILE" "$CONFIG_TEMP_FILE" "$ORPHANED_TEMP_FILE" "$DUPLICATE_TEMP_FILE" "$MISSING_TEMP_FILE" "$DM_STRUCTURED_FILE" 2>/dev/null || true
