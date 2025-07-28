@@ -1,5 +1,7 @@
 #!/bin/bash
-# VERSION 31 - Proxmox Device Mapper Issue Detector
+# VERSION 33 - Proxmox Device Mapper Issue Detector
+# CRITICAL FIX v33: Fixed storage pool extraction regex
+# CRITICAL FIX v32: Duplicate detection now includes storage pool to prevent false positives
 # Detects DUPLICATE and TOMBSTONED device mapper entries
 # Shows VM status with health indicators
 # Identifies critical issues that cause VM failures
@@ -8,11 +10,11 @@
 # Mailjet Configuration
 MAILJET_API_KEY="%API KEY%"
 MAILJET_API_SECRET="%API SECRET%"
-FROM_EMAIL="%FROM EMAIL%"
+FROM_EMAIL="%EMAIL id%"
 FROM_NAME="ProxMox DM Issue Detector"
 TO_EMAIL="%TO EMAIL%"
 
-echo "Proxmox Device Mapper Issue Detector v31"
+echo "Proxmox Device Mapper Issue Detector v33"
 echo "Node: $(hostname)"
 echo "Date: $(date)"
 echo "Mode: DUPLICATE & TOMBSTONE DETECTION + OPTIONAL CLEANUP + EMAIL REPORTING"
@@ -113,8 +115,12 @@ parse_dm_entries() {
         VM_ID=$(echo "$DM_NAME" | sed -n 's/.*vm--\([0-9]\+\)--.*/\1/p')
         
         if [ -n "$VM_ID" ]; then
-            # Extract storage pool and disk number
-            STORAGE_PART=$(echo "$DM_NAME" | sed -n 's/^\([^-]*\(-[^-]*\)*\)--vm--.*/\1/p' | sed 's/--/-/g')
+            # Extract storage pool by getting everything before 'vm--'
+            STORAGE_PART=$(echo "$DM_NAME" | sed 's/-vm--.*//')
+            # Convert double dashes back to single dashes in storage name
+            STORAGE_PART=$(echo "$STORAGE_PART" | sed 's/--/-/g')
+            
+            # Extract disk number
             DISK_NUM=$(echo "$DM_NAME" | sed -n 's/.*--disk--\([0-9]\+\).*/\1/p')
             
             echo "DM:${VM_ID}:${STORAGE_PART}:${DISK_NUM}:${DM_NAME}"
@@ -144,22 +150,23 @@ DM_PARSED_FILE=$(mktemp)
 DUPLICATE_FILE=$(mktemp)
 parse_dm_entries > "$DM_PARSED_FILE"
 
-# Check for DUPLICATES first (multiple DM entries for same VM+disk)
+# Check for DUPLICATES first (multiple DM entries for same VM+storage+disk)
 echo ""
 echo "Step 3: Detecting DUPLICATE entries (critical issue!)..."
 echo ""
 
-# Find duplicates by counting occurrences of VM:DISK combinations
-awk -F: '{print $2":"$4}' "$DM_PARSED_FILE" | sort | uniq -c | while read count vm_disk; do
+# CRITICAL FIX: Include storage pool in duplicate detection (VM:STORAGE:DISK)
+awk -F: '{print $2":"$3":"$4}' "$DM_PARSED_FILE" | sort | uniq -c | while read count vm_storage_disk; do
     if [ "$count" -gt 1 ]; then
-        vm_id=$(echo "$vm_disk" | cut -d: -f1)
-        disk_num=$(echo "$vm_disk" | cut -d: -f2)
+        vm_id=$(echo "$vm_storage_disk" | cut -d: -f1)
+        storage=$(echo "$vm_storage_disk" | cut -d: -f2)
+        disk_num=$(echo "$vm_storage_disk" | cut -d: -f3)
         
-        echo "❌ CRITICAL DUPLICATE: VM $vm_id disk-$disk_num has $count device mapper entries!"
+        echo "❌ CRITICAL DUPLICATE: VM $vm_id storage $storage disk-$disk_num has $count device mapper entries!"
         echo "   → This WILL cause unpredictable behavior and VM failures!"
         
-        # Find all DM entries for this duplicate
-        grep "^DM:${vm_id}:[^:]*:${disk_num}:" "$DM_PARSED_FILE" | while IFS= read -r dup_line; do
+        # Find all DM entries for this duplicate (matching VM, storage, and disk)
+        grep "^DM:${vm_id}:${storage}:${disk_num}:" "$DM_PARSED_FILE" | while IFS= read -r dup_line; do
             dm_name=$(echo "$dup_line" | cut -d: -f5)
             echo "      - $dm_name"
             echo "$dup_line:DUPLICATE" >> "$DUPLICATE_FILE"
@@ -320,9 +327,9 @@ if [ "$TOTAL_VMS" -gt 0 ]; then
         # Check for duplicates (most critical)
         if [ -s "$VM_DUPLICATES_FILE" ] && grep -q "^${vm_id}$" "$VM_DUPLICATES_FILE"; then
             dup_count=$(grep "^DM:${vm_id}:" "$DUPLICATE_FILE" | wc -l)
-            # Count unique disks with duplicates
-            unique_disks=$(grep "^DM:${vm_id}:" "$DUPLICATE_FILE" | cut -d: -f4 | sort -u | wc -l)
-            health_status="🚨 $unique_disks disk(s) DUPLICATED!"
+            # Count unique storage:disk combinations with duplicates
+            unique_storage_disks=$(grep "^DM:${vm_id}:" "$DUPLICATE_FILE" | cut -d: -f3,4 | sort -u | wc -l)
+            health_status="🚨 $unique_storage_disks storage:disk(s) DUPLICATED!"
         # Check for tombstones
         elif [ -s "$VM_ISSUES_FILE" ] && grep -q "^${vm_id}$" "$VM_ISSUES_FILE"; then
             issue_count=$(grep -c "^DM:${vm_id}:" "$TOMBSTONED_TEMP_FILE" 2>/dev/null || echo "0")
@@ -757,7 +764,7 @@ generate_html_email() {
     <div class='container'>
         <div style='font-size: 0.9em; color: #6c757d; margin-bottom: 20px; border-bottom: 1px solid #dee2e6; padding-bottom: 10px;'>
 EOF
-    echo "            <p>Proxmox Device Mapper Issue Detection Report v31 - $(date '+%Y-%m-%d %H:%M:%S')</p>"
+    echo "            <p>Proxmox Device Mapper Issue Detection Report v33 - $(date '+%Y-%m-%d %H:%M:%S')</p>"
     echo "        </div>"
     echo "        "
     echo "        <div class='title-header' style='background-color: $([ "$TOMBSTONED_COUNT" -gt 20 ] && echo "#dc3545" || [ "$TOMBSTONED_COUNT" -gt 0 ] && echo "#ffc107" || echo "#28a745");'>"
@@ -780,7 +787,7 @@ EOF
             echo "            <strong>⚠️ WARNING:</strong> $TOMBSTONED_COUNT tombstoned entries detected"
             echo "            <p style='margin: 10px 0 0 0;'>These orphaned entries will cause 'Device busy' errors when creating VM disks.</p>"
         fi
-        echo "            <p style='font-size: 0.9em; margin: 10px 0;'>Run cleanup: <span class='code-inline'>./Proxmox_DM_Cleanup_v31.sh</span></p>"
+        echo "            <p style='font-size: 0.9em; margin: 10px 0;'>Run cleanup: <span class='code-inline'>./Proxmox_DM_Cleanup_v33.sh</span></p>"
         echo "        </div>"
     else
         echo "        <div class='success'>"
@@ -875,9 +882,9 @@ EOF
             row_style=""
             
             if [ -s "$VM_DUPLICATES_FILE" ] && grep -q "^${vm_id}$" "$VM_DUPLICATES_FILE"; then
-                # Count unique disks with duplicates
-                unique_disks=$(grep "^DM:${vm_id}:" "$DUPLICATE_FILE" | cut -d: -f4 | sort -u | wc -l)
-                health_html="<span style='color: #dc3545; font-weight: bold;'>🚨 $unique_disks disk(s) DUPLICATED!</span>"
+                # Count unique storage:disk combinations with duplicates
+                unique_storage_disks=$(grep "^DM:${vm_id}:" "$DUPLICATE_FILE" | cut -d: -f3,4 | sort -u | wc -l)
+                health_html="<span style='color: #dc3545; font-weight: bold;'>🚨 $unique_storage_disks storage:disk(s) DUPLICATED!</span>"
                 row_style="background-color: #ffebee;"
             elif [ -s "$VM_ISSUES_FILE" ] && grep -q "^${vm_id}$" "$VM_ISSUES_FILE"; then
                 issue_count=$(grep -c "^DM:${vm_id}:" "$TOMBSTONED_TEMP_FILE" 2>/dev/null || echo "0")
@@ -957,7 +964,7 @@ EOF
         fi
         
         echo "                <p style='margin-top: 15px;'><strong>Fix now:</strong> SSH to $(hostname) and run:</p>"
-        echo "                <p style='margin: 5px 0; padding: 10px; background-color: #f8f9fa; border-radius: 4px; font-family: monospace;'>./Proxmox_DM_Cleanup_v31.sh</p>"
+                        echo "                <p style='margin: 5px 0; padding: 10px; background-color: #f8f9fa; border-radius: 4px; font-family: monospace;'>./Proxmox_DM_Cleanup_v33.sh</p>"
         echo "            </div>"
         echo "        </div>"
     else
@@ -969,8 +976,8 @@ EOF
     fi
     
     echo "        <div class='footer'>"
-    echo "            <p><strong>ProxMox DM Issue Detector v31</strong></p>"
-    echo "            <p>Accurate detection of orphaned device mapper entries</p>"
+    echo "            <p><strong>ProxMox DM Issue Detector v33</strong></p>"
+    echo "            <p>CRITICAL FIX: Storage pool extraction now works correctly</p>"
     echo "            <p>Node: <strong>$(hostname)</strong> • Generated: $(date)</p>"
     echo "            <p><a href='https://github.com/keithrlucier/proxmox-dm-health-check'>📂 GitHub Repository</a> • <a href='https://github.com/keithrlucier/proxmox-dm-health-check/issues'>🐛 Report Issues</a></p>"
     echo "        </div>"
@@ -1086,18 +1093,19 @@ if [ "$TOTAL_ISSUES" -gt 0 ]; then
             echo "⚠️  DUPLICATES CAUSE UNPREDICTABLE VM BEHAVIOR AND FAILURES!"
             echo ""
             
-            # Process duplicates, keeping only the first occurrence
-            awk -F: '{print $2":"$4}' "$DUPLICATE_FILE" | sort -u | while read vm_disk; do
-                vm_id=$(echo "$vm_disk" | cut -d: -f1)
-                disk_num=$(echo "$vm_disk" | cut -d: -f2)
+            # Process duplicates, keeping only the first occurrence for each VM:storage:disk combination
+            awk -F: '{print $2":"$3":"$4}' "$DUPLICATE_FILE" | sort -u | while read vm_storage_disk; do
+                vm_id=$(echo "$vm_storage_disk" | cut -d: -f1)
+                storage=$(echo "$vm_storage_disk" | cut -d: -f2)
+                disk_num=$(echo "$vm_storage_disk" | cut -d: -f3)
                 
                 echo "----------------------------------------"
-                echo "🚨 DUPLICATE SET for VM $vm_id disk-$disk_num:"
+                echo "🚨 DUPLICATE SET for VM $vm_id storage $storage disk-$disk_num:"
                 echo ""
                 
-                # Get all entries for this VM+disk
+                # Get all entries for this VM+storage+disk
                 FIRST_ENTRY=true
-                grep "^DM:${vm_id}:[^:]*:${disk_num}:" "$DUPLICATE_FILE" | while IFS= read -r dup_entry; do
+                grep "^DM:${vm_id}:${storage}:${disk_num}:" "$DUPLICATE_FILE" | while IFS= read -r dup_entry; do
                     dm_name=$(echo "$dup_entry" | cut -d: -f5)
                     
                     if [ "$FIRST_ENTRY" = "true" ]; then
