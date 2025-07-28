@@ -1,9 +1,20 @@
 # 🚨 Proxmox Device Mapper Issue Detector & Cleanup Toolkit
 
-**Author**: Keith R Lucier — keithrlucier@gmail.com  
-**ProSource** - www.getprosource.com  
-**Version**: 33  
+**Author**: Keith R. Lucier — keithrlucier@gmail.com  
+**Version**: 34  
 **Purpose**: Detect and fix **TRUE DUPLICATE** device mapper entries that cause VM failures
+
+---
+
+## ⚠️ IMPORTANT DISCLAIMER - USE AT YOUR OWN RISK
+
+**This script directly modifies device mapper entries which are critical to VM operations. While designed with safety features and confirmation prompts, YOU USE THIS SCRIPT ENTIRELY AT YOUR OWN RISK.**
+
+- **NO WARRANTY**: Provided "AS IS" without warranty of any kind
+- **NO SUPPORT**: No support is offered or implied
+- **YOUR RESPONSIBILITY**: You bear full responsibility for any outcomes
+- **BACKUP FIRST**: Always ensure proper backups before running cleanup
+- **TEST FIRST**: Test in non-production environments before production use
 
 ---
 
@@ -16,7 +27,7 @@ This toolkit primarily targets **DUPLICATE DEVICE MAPPER ENTRIES** - the #1 caus
 - ❌ **VM startup failures**
 - ❌ **Potential data corruption**
 
-**Version 33 accurately detects ONLY TRUE duplicates** - multiple entries for the same VM, storage pool, and disk combination.
+**Version 34 accurately detects ONLY TRUE duplicates and tombstones** - with proper storage pool verification to eliminate false positives.
 
 ---
 
@@ -27,11 +38,12 @@ The Proxmox Device Mapper Issue Detector is a professionally engineered Bash scr
 **Key Focus Areas:**
 - 🚨 **TRUE DUPLICATE ENTRIES** (Critical): Multiple DM entries for same VM disk on same storage
 - ⚠️ **TOMBSTONED ENTRIES** (Warning): Orphaned entries that block disk creation
-- ✅ **ACCURATE DETECTION** (v33): No false positives for multi-storage configurations
+- ✅ **ACCURATE DETECTION** (v34): No false positives for multi-storage configurations
 
-**🆕 Critical Fixes in v32/v33:**
+**🆕 Critical Fixes in v32/v33/v34:**
 - **v32**: Fixed false positive duplicates for different storage pools
 - **v33**: Fixed storage pool extraction for accurate detection
+- **v34**: Fixed false positive tombstones + added nvme/mpath support
 
 ---
 
@@ -40,7 +52,7 @@ The Proxmox Device Mapper Issue Detector is a professionally engineered Bash scr
 ### Primary Detection & Analysis
 - 🚨 **Detects TRUE DUPLICATE device mapper entries** (same VM, storage, and disk)
 - ✅ **Correctly handles multi-storage VMs** (e.g., EFI on one pool, data on another)
-- ⚠️ **Identifies tombstoned entries** (orphaned DM entries with no VM config)
+- ⚠️ **Identifies TRUE tombstoned entries** (with storage pool verification)
 - 📊 **VM health dashboard** showing status for each VM on the node
 - ✅ **Single-pass analysis** with accurate issue counting
 - 📧 **Professional HTML reports** with color-coded severity levels
@@ -64,19 +76,20 @@ Shows for every VM on the node:
 
 ## ✨ Key Features
 
-### Accurate Issue Detection (v33 Improved)
+### Accurate Issue Detection (v34 Perfected)
 - 🚨 **True Duplicate Detection** - Finds multiple DM entries for same VM+storage+disk
 - ✅ **Multi-Storage Support** - Correctly handles VMs with disks on different storage pools
-- ⚠️ **Tombstone Detection** - Identifies orphaned entries from deleted VMs/disks
+- ⚠️ **True Tombstone Detection** - Identifies orphaned entries with storage pool verification
 - 📊 **VM-Centric Analysis** - Shows health status per VM
 - 🎯 **Zero False Positives** - No incorrect flagging of legitimate configurations
+- 🆕 **Extended Disk Support** - Now recognizes nvme and mpath disk types
 
 ### Reporting & Monitoring
 - 📧 **HTML Email Reports** via Mailjet API
 - 🎨 **Color-Coded Severity** (Red=Critical, Yellow=Warning, Green=Good)
 - 📈 **Performance Metrics** (CPU, RAM, uptime, storage)
 - 🏆 **Health Grade** (A+ to F based on issue severity)
-- 🔗 **GitHub Links** for documentation and support
+- 🔗 **GitHub Links** for documentation and issue tracking
 
 ### Safe Interactive Cleanup
 - 🔒 **Read-only by default** - No changes without consent
@@ -99,7 +112,7 @@ Device mapper has:
   ssd--ha01-vm--169--disk--0  ❌ (DUPLICATE on same storage!)
 ```
 
-**NOT a Duplicate (v33 handles correctly):**
+**NOT a Duplicate (v34 handles correctly):**
 ```
 VM 119 config shows: 
   efidisk0: SSD-HA07:vm-119-disk-0  (EFI disk)
@@ -116,12 +129,22 @@ Device mapper has:
 - Can corrupt VM operations
 - **Requires immediate cleanup**
 
-### ⚠️ Tombstoned Entries (WARNING)
+### ⚠️ TRUE Tombstoned Entries (WARNING)
 
-**Example Problem:**
+**TRUE Tombstone Example (v34):**
 ```
-Device mapper has: ssd--ha01-vm--999--disk--0
-But VM 999 doesn't exist on this node!
+Device mapper has: ssd--ha01-vm--119--disk--0
+VM 119 config shows NO disk-0 on storage ssd-ha01
+Result: ❌ TOMBSTONE (correctly identified)
+```
+
+**NOT a Tombstone (v34 fixes this):**
+```
+Device mapper has: ssd--ha01-vm--119--disk--0
+VM 119 config shows: 
+  - efidisk0: ssd-ha07:vm-119-disk-0
+  - scsi0: ssd-ha01:vm-119-disk-0  ✓ (matches!)
+Result: ✅ VALID (not a tombstone)
 ```
 
 **Impact:**
@@ -137,25 +160,25 @@ But VM 999 doesn't exist on this node!
 ### Option 1: Download from GitHub
 ```bash
 # Download latest version
-wget https://raw.githubusercontent.com/keithrlucier/proxmox-dm-health-check/main/Proxmox_DM_Cleanup_v33.sh
+wget https://raw.githubusercontent.com/keithrlucier/proxmox-dm-health-check/main/Proxmox_DM_Cleanup_v34.sh
 
 # Make executable
-chmod +x Proxmox_DM_Cleanup_v33.sh
+chmod +x Proxmox_DM_Cleanup_v34.sh
 
 # Run analysis
-./Proxmox_DM_Cleanup_v33.sh
+./Proxmox_DM_Cleanup_v34.sh
 ```
 
 ### Option 2: Manual Creation
 ```bash
 # Create/edit the script
-nano /root/Proxmox_DM_Cleanup_v33.sh
+nano /root/Proxmox_DM_Cleanup_v34.sh
 
 # Make executable
-chmod +x /root/Proxmox_DM_Cleanup_v33.sh
+chmod +x /root/Proxmox_DM_Cleanup_v34.sh
 
 # Run analysis
-./Proxmox_DM_Cleanup_v33.sh
+./Proxmox_DM_Cleanup_v34.sh
 ```
 
 ---
@@ -168,12 +191,12 @@ crontab -e
 
 Add this line:
 ```bash
-0 22 * * * /root/Proxmox_DM_Cleanup_v33.sh > /var/log/proxmox_dm_check.log 2>&1
+0 22 * * * /root/Proxmox_DM_Cleanup_v34.sh > /var/log/proxmox_dm_check.log 2>&1
 ```
 
 ---
 
-## 📊 Sample Output (v33 Accurate Detection)
+## 📊 Sample Output (v34 Accurate Detection)
 
 ### VM Status Section
 ```
@@ -194,7 +217,7 @@ Additionally, tombstones exist for 69 non-existent VM IDs:
    VM 127    : 2 tombstone(s) ❌ VM DOES NOT EXIST
 ```
 
-### Critical Issue Detection (v33 shows storage pool)
+### Critical Issue Detection (v34 shows storage pool)
 ```
 🔍 ANALYZING DEVICE MAPPER ISSUES
 =========================================
@@ -206,15 +229,19 @@ Step 3: Detecting DUPLICATE entries (critical issue!)...
       - ssd--ha01-vm--115--disk--0
       - ssd--ha01-vm--115--disk--0
 
-✅ No duplicate entries found
+Step 4: Identifying tombstoned entries...
+
+❌ TOMBSTONE: ssd--ha01-vm--138--disk--0
+   → VM 138 exists but has no disk-0 on storage ssd-ha01 in config
+   → This will block VM 138 from creating disk-0 on storage ssd-ha01!
 
 📊 ANALYSIS SUMMARY
 =========================================
    Total device mapper entries: 177
-   Valid entries: 175
+   Valid entries: 174
    Duplicate entries: 2 🚨 CRITICAL ISSUE!
-   Tombstoned entries: 0 ✅
-   Total issues: 2
+   Tombstoned entries: 1 ⚠️ WILL BLOCK DISK CREATION!
+   Total issues: 3
 ```
 
 ---
@@ -223,7 +250,7 @@ Step 3: Detecting DUPLICATE entries (critical issue!)...
 
 ### What Gets Cleaned
 - ✅ **TRUE Duplicate DM entries** (same storage pool, keeps first, removes extras)
-- ✅ **Tombstoned entries** (orphaned with no VM config)
+- ✅ **TRUE Tombstoned entries** (orphaned with proper storage pool verification)
 
 ### What's Protected
 - ✅ **Multi-storage configurations** - Different pools with same disk number are VALID
@@ -255,11 +282,11 @@ TO_EMAIL="admin@yourdomain.com"
   - 🚨 CRITICAL: TRUE duplicates found
   - ⚠️ WARNING: Tombstones only
   - ✅ EXCELLENT: No issues
-- **Storage pool shown** in duplicate detection
+- **Storage pool shown** in all detections
 - **Color-coded health status**
 - **VM-specific issue breakdown**
 - **Clear action items**
-- **GitHub repository links** for documentation and support
+- **GitHub repository links** for documentation
 
 ---
 
@@ -282,7 +309,7 @@ dmsetup create ssd--ha07-vm--998--disk--0 --table '0 204800 linear /dev/sdb 0'
 ### Create Test Tombstone
 ```bash
 # Create orphaned entry
-dmsetup create test--vm--888--disk--0 --table '0 204800 linear /dev/sda 0'
+dmsetup create test--ha01-vm--888--disk--0 --table '0 204800 linear /dev/sda 0'
 ```
 
 ### Cleanup Test Entries
@@ -291,14 +318,21 @@ dmsetup remove ssd--ha01-vm--999--disk--0
 dmsetup remove ssd--ha01-vm--999--disk--0-dup
 dmsetup remove ssd--ha01-vm--998--disk--0
 dmsetup remove ssd--ha07-vm--998--disk--0
-dmsetup remove test--vm--888--disk--0
+dmsetup remove test--ha01-vm--888--disk--0
 ```
 
 ---
 
 ## 🆕 Version History
 
-### Version 33 (Current) - Critical Fixes
+### Version 34 (Current) - Zero False Positives
+- 🔧 **CRITICAL FIX**: Tombstone detection now includes storage pool verification
+- 🚨 **FIXED**: False positive tombstones for multi-storage configurations
+- 🆕 **NEW**: Added support for nvme and mpath disk prefixes
+- 📊 **IMPROVED**: Better storage pool name extraction preserving legitimate "--"
+- 🔒 **ENHANCED**: Python-based JSON escaping for more reliable emails
+
+### Version 33 - Storage Pool Fix
 - 🔧 **FIXED**: Storage pool extraction regex now works correctly
 - 🎯 **FIXED**: Empty storage names in duplicate detection output
 - 📊 **IMPROVED**: Shows storage pool name in duplicate detection
@@ -328,7 +362,7 @@ dmsetup remove test--vm--888--disk--0
 - Proxmox tools: `qm`, `pct`, `dmsetup`
 - Linux tools: `awk`, `sed`, `grep`, `sort`, `uniq`
 - Email: `curl`, Mailjet API
-- Optional: `top`, `free`, `df`, `uptime`
+- Optional: `python3` (for enhanced email escaping), `top`, `free`, `df`, `uptime`
 
 ---
 
@@ -350,56 +384,58 @@ dmsetup remove test--vm--888--disk--0
 **Symptom**: Leftover entries on source  
 **Fix**: Run script on source node
 
-### False Positives (FIXED in v32/v33)
+### False Positive Duplicates (FIXED in v32/v33)
 **Old Bug**: v31 flagged different storage pools as duplicates  
-**v33 Behavior**: Correctly identifies only TRUE duplicates
+**v34 Behavior**: Correctly identifies only TRUE duplicates
+
+### False Positive Tombstones (FIXED in v34)
+**Old Bug**: v33 flagged multi-storage configs as tombstones  
+**v34 Behavior**: Properly verifies storage pool in tombstone detection
 
 ---
 
-## 👨‍💻 Author & Support
+## 👨‍💻 Author
 
 **Keith R. Lucier**  
-Senior Engineer & Systems Administrator | Microsoft Ecosystem Specialist | Power Platform Developer  
+✉️ keithrlucier@gmail.com  
 🔗 [LinkedIn Profile](https://www.linkedin.com/in/keithrlucier/)  
-✉️ keithrlucier@gmail.com
 
-**ProSource Technology Solutions**  
-🌐 [www.getprosource.com](https://www.getprosource.com)
+Created this tool to solve critical Proxmox device mapper issues that were causing VM failures in production environments. The script represents extensive real-world testing and refinement to ensure accurate detection without false positives.
 
-Providing frictionless, responsive, and secure business technology solutions, Keith is a seasoned IT professional with over 30 years of experience leading enterprise environments and delivering results at scale. He has served as a former IT Director for an organization with over 500 employees and currently specializes in:
-
-- Microsoft 365 and Azure ecosystem administration
-- Power Platform development and automation
-- AI & hybrid cloud integrations
-- Enterprise IT strategy and systems modernization
-- **Proxmox virtualization and storage troubleshooting**
-- **Device mapper issue resolution and VM recovery**
-- **Multi-storage VM configuration management**
-- Disaster recovery planning and implementation
-
-Keith combines a deep understanding of business needs with expert-level systems knowledge to architect responsive and resilient infrastructures that prioritize uptime, security, and user empowerment.
-
-### 💬 Getting Help
-
-- **GitHub Issues**: [Report bugs or request features](https://github.com/keithrlucier/proxmox-dm-health-check/issues)
-- **Documentation**: [Full documentation](https://github.com/keithrlucier/proxmox-dm-health-check/blob/main/Documentation.md)
-- **Email**: keithrlucier@gmail.com
+**Remember**: This tool is provided AS-IS with no warranty or support. Use at your own risk.
 
 ---
 
-## ⚠️ Disclaimer
+## 💬 Community Resources
 
-This script is provided as-is. While designed with safety in mind, always understand your environment before running cleanup operations. The script is read-only by default and requires explicit confirmation for any changes.
+- **GitHub Repository**: [Source code and documentation](https://github.com/keithrlucier/proxmox-dm-health-check)
+- **Issue Tracker**: [Report bugs or share experiences](https://github.com/keithrlucier/proxmox-dm-health-check/issues)
+- **Documentation**: [Full documentation](https://github.com/keithrlucier/proxmox-dm-health-check/blob/main/Documentation.md)
+
+**Note**: No support is offered. Issues may be reviewed but responses are not guaranteed.
+
+---
+
+## ⚠️ Final Warning
+
+**USE AT YOUR OWN RISK**. This script modifies critical system components. While it includes safety features and requires confirmation for changes, you are solely responsible for:
+
+- Understanding your environment
+- Having proper backups
+- Testing in non-production first
+- Any outcomes from using this tool
+
+The author assumes no liability for any issues, data loss, or system problems that may result from using this script.
 
 ---
 
 ## 📄 License
 
-MIT
+MIT License - See the [LICENSE](https://github.com/keithrlucier/proxmox-dm-health-check/blob/main/LICENSE) file for details.
 
 ---
 
-**Keywords**: Proxmox duplicate device mapper, VM startup failures, device busy errors, tombstoned entries, VM disk conflicts, Proxmox storage cleanup, device mapper troubleshooting, VM health monitoring, multi-storage VM support, false positive duplicates fixed
+**Keywords**: Proxmox duplicate device mapper, VM startup failures, device busy errors, tombstoned entries, VM disk conflicts, Proxmox storage cleanup, device mapper troubleshooting, VM health monitoring, multi-storage VM support, false positive duplicates fixed, false positive tombstones fixed, nvme mpath support
 
 ---
 
@@ -412,4 +448,4 @@ MIT
 
 ---
 
-**Remember**: Only TRUE duplicates (same storage pool) are CRITICAL! Different storage pools are VALID! 🚨
+**Remember**: Only TRUE duplicates (same storage pool) and TRUE tombstones (verified storage pool) are issues! Different storage pools are VALID! 🚨
