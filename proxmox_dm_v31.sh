@@ -6,11 +6,11 @@
 # Includes HTML email reporting via Mailjet API with GitHub links
 
 # Mailjet Configuration
-MAILJET_API_KEY="%YOUR DETAILS HERE%"
-MAILJET_API_SECRET="%YOUR DETAILS HERE%"
-FROM_EMAIL="%YOUR DETAILS HERE%"
+MAILJET_API_KEY="%YOUR API KEY%"
+MAILJET_API_SECRET="%YOUR SECRET KEY%"
+FROM_EMAIL="%FROM EMAIL%"
 FROM_NAME="ProxMox DM Issue Detector"
-TO_EMAIL="%YOUR DETAILS HERE%"
+TO_EMAIL="%TO EMAIL%"
 
 echo "Proxmox Device Mapper Issue Detector v31"
 echo "Node: $(hostname)"
@@ -703,9 +703,10 @@ EOF
     fi
     
     echo "        <div class='footer'>"
-    echo "            <p><strong>ProxMox Tombstone Detector v30</strong></p>"
+    echo "            <p><strong>ProxMox DM Issue Detector v31</strong></p>"
     echo "            <p>Accurate detection of orphaned device mapper entries</p>"
     echo "            <p>Node: <strong>$(hostname)</strong> • Generated: $(date)</p>"
+    echo "            <p><a href='https://github.com/keithrlucier/proxmox-dm-health-check'>📂 GitHub Repository</a> • <a href='https://github.com/keithrlucier/proxmox-dm-health-check/issues'>🐛 Report Issues</a></p>"
     echo "        </div>"
     echo "    </div>"
     echo "</body>"
@@ -717,8 +718,8 @@ send_mailjet_email() {
     html_content="$1"
     subject="$2"
     
-    # Escape HTML for JSON
-    html_escaped=$(echo "$html_content" | sed 's/\\/\\\\/g' | sed 's/"/\\"/g' | tr '\n' ' ')
+    # Escape HTML for JSON - properly handle quotes and special characters
+    html_escaped=$(echo "$html_content" | sed 's/\\/\\\\/g' | sed 's/"/\\"/g' | sed "s/'/\\'/g" | tr '\n' ' ')
     
     # Create JSON payload
     json_payload="{\"Messages\":[{\"From\":{\"Email\":\"$FROM_EMAIL\",\"Name\":\"$FROM_NAME\"},\"To\":[{\"Email\":\"$TO_EMAIL\"}],\"Subject\":\"$subject\",\"HTMLPart\":\"$html_escaped\",\"TextPart\":\"Proxmox DM Issue Report for $(hostname) - $DUPLICATE_COUNT duplicate entries, $TOMBSTONED_COUNT tombstoned entries found.\"}]}"
