@@ -1,8 +1,7 @@
 # 🚨 Proxmox Device Mapper Issue Detector & Cleanup Toolkit
 
-**Author**: Keith R Lucier — keithrlucier@gmail.com\
-**ProSource** -  ProSource Technology Solutions www.getprosource.com\
-**Version**: 30\  
+**Author**: Keith R Lucier — keithrlucier@gmail.com  
+**Version**: 30  
 **Purpose**: Detect and fix **DUPLICATE** device mapper entries that cause VM failures
 
 ---
@@ -27,6 +26,8 @@ The Proxmox Device Mapper Issue Detector is a professionally engineered Bash scr
 **Key Focus Areas:**
 - 🚨 **DUPLICATE ENTRIES** (Critical): Multiple DM entries for same VM disk
 - ⚠️ **TOMBSTONED ENTRIES** (Warning): Orphaned entries that block disk creation
+
+**🆕 New in v31:** Email reports now include direct GitHub links for easy access to documentation and issue reporting.
 
 ---
 
@@ -115,15 +116,28 @@ But VM 999 doesn't exist on this node!
 
 ## 📁 Installation
 
+### Option 1: Download from GitHub
 ```bash
-# Download/create the script
-nano /root/Proxmox_DM_Cleanup_v30.sh
+# Download latest version
+wget https://raw.githubusercontent.com/keithrlucier/proxmox-dm-health-check/main/Proxmox_DM_Cleanup_v31.sh
 
 # Make executable
-chmod +x /root/Proxmox_DM_Cleanup_v30.sh
+chmod +x Proxmox_DM_Cleanup_v31.sh
 
 # Run analysis
-./Proxmox_DM_Cleanup_v30.sh
+./Proxmox_DM_Cleanup_v31.sh
+```
+
+### Option 2: Manual Creation
+```bash
+# Create/edit the script
+nano /root/Proxmox_DM_Cleanup_v31.sh
+
+# Make executable
+chmod +x /root/Proxmox_DM_Cleanup_v31.sh
+
+# Run analysis
+./Proxmox_DM_Cleanup_v31.sh
 ```
 
 ---
@@ -136,7 +150,7 @@ crontab -e
 
 Add this line:
 ```bash
-0 22 * * * /root/Proxmox_DM_Cleanup_v30.sh > /var/log/proxmox_dm_check.log 2>&1
+0 22 * * * /root/Proxmox_DM_Cleanup_v31.sh > /var/log/proxmox_dm_check.log 2>&1
 ```
 
 ---
@@ -222,6 +236,7 @@ TO_EMAIL="admin@yourdomain.com"
 - **Color-coded health status**
 - **VM-specific issue breakdown**
 - **Clear action items**
+- **GitHub repository links** for documentation and support
 
 ---
 
@@ -249,9 +264,14 @@ dmsetup remove test--vm--888--disk--0
 
 ---
 
-## 🆕 Version 30 Improvements
+## 🆕 Version 31 Improvements
 
-### Major Changes
+### Latest Updates (v31)
+- 🔗 **GitHub Integration** - Added repository links to email reports
+- 📄 **Easy Access** - Direct links to documentation from email footer
+- 🐛 **Bug Tracking** - Users can report issues directly from email
+
+### Major Features (v30)
 - 🎯 **Focus on DUPLICATES** as the critical issue
 - 📊 **VM Status Dashboard** showing health per VM
 - 🔢 **Accurate counting** - no more double-counting
@@ -301,11 +321,15 @@ dmsetup remove test--vm--888--disk--0
 
 ---
 
-## 👨‍💻 Author
+## 👨‍💻 Author & Support
 
 **Keith R. Lucier**  
 Senior Engineer & Systems Administrator | Microsoft Ecosystem Specialist | Power Platform Developer  
-🔗 [LinkedIn Profile](https://www.linkedin.com/in/keithrlucier/)
+🔗 [LinkedIn Profile](https://www.linkedin.com/in/keithrlucier/)  
+✉️ keithrlucier@gmail.com
+
+**ProSource Technology Solutions**  
+🌐 [www.getprosource.com](https://www.getprosource.com)
 
 Providing frictionless, responsive, and secure business technology solutions, Keith is a seasoned IT professional with over 30 years of experience leading enterprise environments and delivering results at scale. He has served as a former IT Director for an organization with over 500 employees and currently specializes in:
 
@@ -318,6 +342,12 @@ Providing frictionless, responsive, and secure business technology solutions, Ke
 - Disaster recovery planning and implementation
 
 Keith combines a deep understanding of business needs with expert-level systems knowledge to architect responsive and resilient infrastructures that prioritize uptime, security, and user empowerment.
+
+### 💬 Getting Help
+
+- **GitHub Issues**: [Report bugs or request features](https://github.com/keithrlucier/proxmox-dm-health-check/issues)
+- **Documentation**: [Full documentation](https://github.com/keithrlucier/proxmox-dm-health-check/blob/main/Documentation.md)
+- **Email**: keithrlucier@gmail.com
 
 ---
 
@@ -339,9 +369,10 @@ MIT
 
 ## 🔗 Quick Links
 
-- [Full Documentation](Documentation.md)
-- [Issue Tracker](https://github.com/yourusername/proxmox-dm-cleanup/issues)
-- [Latest Release](https://github.com/yourusername/proxmox-dm-cleanup/releases)
+- [GitHub Repository](https://github.com/keithrlucier/proxmox-dm-health-check)
+- [Full Documentation](https://github.com/keithrlucier/proxmox-dm-health-check/blob/main/Documentation.md)
+- [Issue Tracker](https://github.com/keithrlucier/proxmox-dm-health-check/issues)
+- [Latest Release](https://github.com/keithrlucier/proxmox-dm-health-check/releases)
 
 ---
 

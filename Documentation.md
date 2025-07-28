@@ -1,14 +1,30 @@
-# Documentation: Proxmox Device Mapper Issue Detector (Version 30)
+# Documentation: Proxmox Device Mapper Issue Detector (Version 31)
 
 ## Overview
 
-The **Proxmox Device Mapper Issue Detector v30** is a comprehensive Bash-based tool designed to detect and resolve critical device mapper issues that cause VM failures in Proxmox Virtual Environment (PVE). The script's primary focus is identifying **duplicate device mapper entries** - the most critical issue that causes unpredictable VM behavior and startup failures.
+The **Proxmox Device Mapper Issue Detector v31** is a comprehensive Bash-based tool designed to detect and resolve critical device mapper issues that cause VM failures in Proxmox Virtual Environment (PVE). The script's primary focus is identifying **duplicate device mapper entries** - the most critical issue that causes unpredictable VM behavior and startup failures.
 
 **Key Focus Areas:**
 - **DUPLICATE ENTRIES** (Critical): Multiple device mapper entries for the same VM disk
 - **TOMBSTONED ENTRIES** (Warning): Orphaned entries for deleted VMs/disks that block future disk creation
 
-The script performs real-time analysis, generates professional HTML reports with VM-specific health status, and delivers these reports via Mailjet email API. It includes a priority-based interactive cleanup mode for safe removal of problematic entries.
+The script performs real-time analysis, generates professional HTML reports with VM-specific health status, and delivers these reports via Mailjet email API. **New in v31:** Email reports now include direct GitHub repository links for easy access to documentation, source code, and issue reporting. It includes a priority-based interactive cleanup mode for safe removal of problematic entries.
+
+## Quick Start
+
+```bash
+# Download and run the script
+wget https://raw.githubusercontent.com/keithrlucier/proxmox-dm-health-check/main/Proxmox_DM_Cleanup_v31.sh
+chmod +x Proxmox_DM_Cleanup_v31.sh
+./Proxmox_DM_Cleanup_v31.sh
+```
+
+The script will:
+1. Analyze all device mapper entries
+2. Detect duplicates and tombstones
+3. Show VM health status
+4. Send an email report (if configured)
+5. Optionally offer interactive cleanup
 
 ## Key Features
 
@@ -29,6 +45,7 @@ The script performs real-time analysis, generates professional HTML reports with
 - Health grading system (A+ to F) - any duplicates = automatic F grade
 - System performance metrics and resource utilization
 - Clear distinction between critical (duplicates) and warning (tombstones) issues
+- **GitHub Integration (v31)**: Email footer includes repository and documentation links
 
 ### Interactive Cleanup
 - Priority-based cleanup: Duplicates first, then tombstones
@@ -127,6 +144,12 @@ Key sections include:
 - VM status table
 - System information
 - Action required section with cleanup instructions
+- **GitHub repository links** in footer for documentation and support
+
+The email footer now includes:
+- Direct link to the GitHub repository
+- Link to full documentation
+- Easy access for issue reporting and updates
 
 ### 7. **Priority-Based Interactive Cleanup**
 Two-phase cleanup process:
@@ -140,26 +163,35 @@ Two-phase cleanup process:
 
 ## Installation
 
-### 1. **Copy the script to the node**
+### Option 1: Download from GitHub (Recommended)
 ```bash
-scp Proxmox_DM_Cleanup_v30.sh root@<node-ip>:/root/
+# Download the latest version directly from GitHub
+wget https://raw.githubusercontent.com/keithrlucier/proxmox-dm-health-check/main/Proxmox_DM_Cleanup_v31.sh -O /root/Proxmox_DM_Cleanup_v31.sh
+
+# Set execution permissions
+chmod +x /root/Proxmox_DM_Cleanup_v31.sh
+
+# Run the script
+./Proxmox_DM_Cleanup_v31.sh
 ```
 
-### 2. **Set execution permissions**
+### Option 2: Manual Installation
 ```bash
-chmod +x /root/Proxmox_DM_Cleanup_v30.sh
-```
+# Copy the script to the node
+scp Proxmox_DM_Cleanup_v31.sh root@<node-ip>:/root/
 
-### 3. **Run the script**
-```bash
-./Proxmox_DM_Cleanup_v30.sh
+# Set execution permissions
+chmod +x /root/Proxmox_DM_Cleanup_v31.sh
+
+# Run the script
+./Proxmox_DM_Cleanup_v31.sh
 ```
 
 ## Usage Examples
 
 ### Basic Analysis (Read-Only)
 ```bash
-./Proxmox_DM_Cleanup_v30.sh
+./Proxmox_DM_Cleanup_v31.sh
 ```
 This performs analysis and sends an email report without making any changes.
 
@@ -198,10 +230,12 @@ crontab -e
 
 Add this line:
 ```bash
-0 22 * * * /root/Proxmox_DM_Cleanup_v30.sh > /var/log/proxmox_dm_check.log 2>&1
+0 22 * * * /root/Proxmox_DM_Cleanup_v31.sh > /var/log/proxmox_dm_check.log 2>&1
 ```
 
 ## Configuration
+
+### Script Variables
 
 Edit these variables at the top of the script:
 
@@ -212,6 +246,26 @@ FROM_EMAIL="automation@yourdomain.com"
 FROM_NAME="ProxMox DM Issue Detector"
 TO_EMAIL="admin@yourdomain.com"
 ```
+
+### Mailjet Email Service Setup
+
+[Mailjet](https://www.mailjet.com) is the email delivery service used for sending HTML reports.
+
+#### Setting up Mailjet:
+
+1. **Create Account**: Sign up at [https://app.mailjet.com/signup](https://app.mailjet.com/signup)
+
+2. **Get API Credentials**:
+   - Navigate to Account Settings → API Keys
+   - Click "Create API Key"
+   - Save both API Key and Secret Key
+
+3. **Verify Sender**:
+   - Go to Senders & Domains
+   - Add your FROM_EMAIL address
+   - Confirm the verification email
+
+4. **Optional**: Configure domain authentication for better deliverability
 
 ## Safety and Best Practices
 
@@ -273,29 +327,74 @@ dmsetup remove test--vm--999--disk--0-dup
 dmsetup remove test--vm--888--disk--0
 ```
 
-## Version 30 Key Improvements
+## Version 31 Key Improvements
 
-### 🎯 Focus Shift
+### 🆕 New in v31
+- **GitHub Integration**: Email reports now include repository links
+- **Enhanced Footer**: Direct links to documentation and issue tracker
+- **Easy Updates**: Users can check for latest version via GitHub
+- **Community Support**: Direct access to issue reporting from emails
+
+### 🎯 Core Features (from v30)
 - **Primary Focus**: Duplicate detection (critical VM-breaking issue)
 - **Secondary Focus**: Tombstone detection (blocks operations)
-- **Removed**: Confusing "stale" terminology and double-counting
-
-### 🆕 New Features
 - **VM Status Dashboard**: Shows health for each VM on node
-- **Duplicate Detection**: Identifies multiple DM entries per disk
 - **Single-Pass Analysis**: Accurate counting without duplication
 - **Priority Cleanup**: Handles critical issues first
 
-### 🔧 Improvements
+### 🔧 Improvements Over Previous Versions
 - **Clear Severity Levels**: Duplicates = Critical, Tombstones = Warning
 - **Better Health Grading**: Duplicates = automatic F grade
 - **Enhanced Email Subjects**: Clearly indicates issue severity
 - **Simplified Terminology**: Valid, Duplicate, or Tombstoned only
+- **No Double-Counting**: Fixed analysis accuracy issues
 
 ### 📊 Better Reporting
 - **VM-Centric View**: Focus on VMs rather than just entries
 - **Visual Health Indicators**: 🚨, ⚠️, ✅ for quick assessment
 - **Actionable Alerts**: Clear explanation of impact and solutions
+- **GitHub Links**: Easy access to documentation and support
+
+## Dependencies
+
+### Required Tools
+- **Proxmox Tools**: `qm`, `pct`, `dmsetup`
+- **Core Linux**: `awk`, `sed`, `grep`, `sort`, `uniq`, `wc`
+- **Email Delivery**: `curl` (for Mailjet API)
+- **System Info**: `top`, `free`, `df`, `uptime`, `lscpu`
+
+### Optional Tools
+- `dmidecode` - System hardware information
+- `ip` - Network interface details
+- Additional monitoring tools
+
+All required tools are typically pre-installed on Proxmox nodes.
+
+## GitHub Repository
+
+The Proxmox Device Mapper Issue Detector is open source and available on GitHub:
+
+**Repository**: [https://github.com/keithrlucier/proxmox-dm-health-check](https://github.com/keithrlucier/proxmox-dm-health-check)
+
+### Available Resources:
+- **Source Code**: Latest version of the script
+- **Documentation**: This document and additional guides
+- **Issue Tracker**: Report bugs or request features
+- **Releases**: Version history and changelogs
+
+### Contributing
+- Fork the repository
+- Create feature branches
+- Submit pull requests
+- Report issues with detailed information
+
+## Support
+
+### Getting Help
+- **GitHub Issues**: [Report problems or request features](https://github.com/keithrlucier/proxmox-dm-health-check/issues)
+- **Documentation**: [Full documentation online](https://github.com/keithrlucier/proxmox-dm-health-check/blob/main/Documentation.md)
+- **Author**: Keith R. Lucier - keithrlucier@gmail.com
+- **Company**: ProSource Technology Solutions - [www.getprosource.com](https://www.getprosource.com)
 
 ## Troubleshooting
 
@@ -316,7 +415,13 @@ dmsetup remove test--vm--888--disk--0
 
 ## Summary
 
-The Proxmox Device Mapper Issue Detector v30 fills a critical gap in Proxmox operations by identifying and resolving device mapper issues that cause VM failures. By focusing on duplicate detection as the primary concern, the script helps administrators maintain stable and predictable VM operations.
+The Proxmox Device Mapper Issue Detector v31 fills a critical gap in Proxmox operations by identifying and resolving device mapper issues that cause VM failures. By focusing on duplicate detection as the primary concern, the script helps administrators maintain stable and predictable VM operations.
+
+**Version 31 Enhancement**: Email reports now include direct GitHub repository links, making it easier for users to:
+- Access the latest documentation
+- Report issues directly
+- Check for updates
+- Contribute to the project
 
 The tool is essential for:
 - Clusters with frequent VM migrations
@@ -325,9 +430,13 @@ The tool is essential for:
 - Preventive maintenance
 - Troubleshooting VM startup issues
 
-Regular use of this script (via cron) provides early warning of developing issues and maintains a clean, efficient Proxmox environment.
+Regular use of this script (via cron) provides early warning of developing issues and maintains a clean, efficient Proxmox environment. The GitHub integration ensures users always have access to the latest updates and community support.
 
 **Remember**: Duplicates are critical and require immediate attention, while tombstones are important but less urgent. The script's priority-based approach ensures the most dangerous issues are addressed first.
 
+## License
+
+This project is licensed under the MIT License. See the [LICENSE](https://github.com/keithrlucier/proxmox-dm-health-check/blob/main/LICENSE) file for details.
+
 ---
-**End of Documentation v30**
+**End of Documentation v31**

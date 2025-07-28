@@ -1,18 +1,18 @@
 #!/bin/bash
-# VERSION 30 - Proxmox Device Mapper Issue Detector
+# VERSION 31 - Proxmox Device Mapper Issue Detector
 # Detects DUPLICATE and TOMBSTONED device mapper entries
 # Shows VM status with health indicators
 # Identifies critical issues that cause VM failures
-# Includes HTML email reporting via Mailjet API
+# Includes HTML email reporting via Mailjet API with GitHub links
 
 # Mailjet Configuration
-MAILJET_API_KEY="%DETAILS HERE%"
-MAILJET_API_SECRET="%DETAILS HERE%"
-FROM_EMAIL="%DETAILS HERE%"
+MAILJET_API_KEY="c43592765ac7f1368cbe599e4558f9f2"
+MAILJET_API_SECRET="9fa6ed98a5a92f0006eefef14f079ac7"
+FROM_EMAIL="automation@prosource-demo.com"
 FROM_NAME="ProxMox DM Issue Detector"
-TO_EMAIL="%DETAILS HERE%"
+TO_EMAIL="klucier@getprosource.com"
 
-echo "Proxmox Device Mapper Issue Detector v30"
+echo "Proxmox Device Mapper Issue Detector v31"
 echo "Node: $(hostname)"
 echo "Date: $(date)"
 echo "Mode: DUPLICATE & TOMBSTONE DETECTION + OPTIONAL CLEANUP + EMAIL REPORTING"
@@ -483,6 +483,8 @@ generate_html_email() {
         .section { margin: 20px 0; padding: 15px; background-color: #f9f9f9; border-radius: 6px; border: 1px solid #dee2e6; }
         .explanation-box { background-color: #e3f2fd; color: #0d47a1; padding: 15px; border-radius: 6px; border-left: 4px solid #2196f3; margin: 15px 0; }
         .footer { margin-top: 20px; padding-top: 20px; border-top: 1px solid #dee2e6; color: #6c757d; font-size: 0.9em; }
+        .footer a { color: #007bff; text-decoration: none; }
+        .footer a:hover { text-decoration: underline; }
         .code-inline { background-color: #e9ecef; color: #212529; padding: 2px 4px; border-radius: 3px; font-family: Courier New, monospace; font-size: 0.9em; }
         .grade-badge { display: inline-block; padding: 4px 12px; border-radius: 4px; font-weight: bold; }
     </style>
@@ -491,7 +493,7 @@ generate_html_email() {
     <div class='container'>
         <div style='font-size: 0.9em; color: #6c757d; margin-bottom: 20px; border-bottom: 1px solid #dee2e6; padding-bottom: 10px;'>
 EOF
-    echo "            <p>Proxmox Device Mapper Issue Detection Report v30 - $(date '+%Y-%m-%d %H:%M:%S')</p>"
+    echo "            <p>Proxmox Device Mapper Issue Detection Report v31 - $(date '+%Y-%m-%d %H:%M:%S')</p>"
     echo "        </div>"
     echo "        "
     echo "        <div class='title-header' style='background-color: $([ "$TOMBSTONED_COUNT" -gt 20 ] && echo "#dc3545" || [ "$TOMBSTONED_COUNT" -gt 0 ] && echo "#ffc107" || echo "#28a745");'>"
@@ -514,7 +516,7 @@ EOF
             echo "            <strong>⚠️ WARNING:</strong> $TOMBSTONED_COUNT tombstoned entries detected"
             echo "            <p style='margin: 10px 0 0 0;'>These orphaned entries will cause 'Device busy' errors when creating VM disks.</p>"
         fi
-        echo "            <p style='font-size: 0.9em; margin: 10px 0;'>Run cleanup: <span class='code-inline'>./Proxmox_DM_Cleanup_v30.sh</span></p>"
+        echo "            <p style='font-size: 0.9em; margin: 10px 0;'>Run cleanup: <span class='code-inline'>./Proxmox_DM_Cleanup_v31.sh</span></p>"
         echo "        </div>"
     else
         echo "        <div class='success'>"
@@ -689,7 +691,7 @@ EOF
         fi
         
         echo "                <p style='margin-top: 15px;'><strong>Fix now:</strong> SSH to $(hostname) and run:</p>"
-        echo "                <p style='margin: 5px 0; padding: 10px; background-color: #f8f9fa; border-radius: 4px; font-family: monospace;'>./Proxmox_DM_Cleanup_v30.sh</p>"
+        echo "                <p style='margin: 5px 0; padding: 10px; background-color: #f8f9fa; border-radius: 4px; font-family: monospace;'>./Proxmox_DM_Cleanup_v31.sh</p>"
         echo "            </div>"
         echo "        </div>"
     else
