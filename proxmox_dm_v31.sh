@@ -6,11 +6,7 @@
 # Includes HTML email reporting via Mailjet API with GitHub links
 
 # Mailjet Configuration
-MAILJET_API_KEY="%YOUR API KEY%"
-MAILJET_API_SECRET="%YOUR SECRET KEY%"
-FROM_EMAIL="%FROM EMAIL%"
 FROM_NAME="ProxMox DM Issue Detector"
-TO_EMAIL="%TO EMAIL%"
 
 echo "Proxmox Device Mapper Issue Detector v31"
 echo "Node: $(hostname)"
@@ -467,26 +463,290 @@ generate_html_email() {
     <meta charset='UTF-8'>
     <meta name='viewport' content='width=device-width, initial-scale=1.0'>
     <style>
-        body { font-family: 'Segoe UI', Arial, sans-serif; line-height: 1.6; color: #333; margin: 0; padding: 20px; background-color: #f5f5f5; }
-        .container { max-width: 800px; margin: 0 auto; background-color: #fff; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); padding: 25px; }
-        .title-header { background-color: #4f46e5; color: white; padding: 20px; border-radius: 6px; margin-bottom: 20px; text-align: center; }
-        .section-header { background-color: #495057; color: white; padding: 15px; border-radius: 6px; margin: 20px 0 15px 0; text-align: center; }
-        h1 { margin: 0; font-size: 24px; font-weight: bold; }
-        h3 { margin: 0; font-size: 18px; font-weight: bold; }
-        .alert { background-color: #fff3cd; color: #856404; padding: 15px; border-radius: 6px; border-left: 4px solid #ffc107; margin: 15px 0; }
-        .critical { background-color: #f8d7da; color: #721c24; padding: 15px; border-radius: 6px; border-left: 4px solid #dc3545; margin: 15px 0; }
-        .success { background-color: #d4edda; color: #155724; padding: 15px; border-radius: 6px; border-left: 4px solid #28a745; margin: 15px 0; }
-        .metric-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 15px; margin: 15px 0; }
-        .metric-item { background-color: #f8f9fa; padding: 15px; border-radius: 6px; border: 1px solid #dee2e6; }
-        .metric-label { font-weight: bold; color: #495057; margin-bottom: 5px; }
-        .metric-value { color: #212529; font-size: 1.1em; }
-        .section { margin: 20px 0; padding: 15px; background-color: #f9f9f9; border-radius: 6px; border: 1px solid #dee2e6; }
-        .explanation-box { background-color: #e3f2fd; color: #0d47a1; padding: 15px; border-radius: 6px; border-left: 4px solid #2196f3; margin: 15px 0; }
-        .footer { margin-top: 20px; padding-top: 20px; border-top: 1px solid #dee2e6; color: #6c757d; font-size: 0.9em; }
-        .footer a { color: #007bff; text-decoration: none; }
-        .footer a:hover { text-decoration: underline; }
-        .code-inline { background-color: #e9ecef; color: #212529; padding: 2px 4px; border-radius: 3px; font-family: Courier New, monospace; font-size: 0.9em; }
-        .grade-badge { display: inline-block; padding: 4px 12px; border-radius: 4px; font-weight: bold; }
+        /* Reset and base styles */
+        body { 
+            font-family: 'Segoe UI', Arial, sans-serif; 
+            line-height: 1.6; 
+            color: #333; 
+            margin: 0; 
+            padding: 20px; 
+            background-color: #f5f5f5;
+            -webkit-text-size-adjust: 100%;
+            -ms-text-size-adjust: 100%;
+        }
+        
+        /* Container with responsive padding */
+        .container { 
+            max-width: 800px; 
+            margin: 0 auto; 
+            background-color: #fff; 
+            border-radius: 8px; 
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1); 
+            padding: 25px;
+        }
+        
+        /* Headers with responsive sizing */
+        .title-header { 
+            background-color: #4f46e5; 
+            color: white; 
+            padding: 20px; 
+            border-radius: 6px; 
+            margin-bottom: 20px; 
+            text-align: center; 
+        }
+        
+        .section-header { 
+            background-color: #495057; 
+            color: white; 
+            padding: 15px; 
+            border-radius: 6px; 
+            margin: 20px 0 15px 0; 
+            text-align: center; 
+        }
+        
+        h1 { 
+            margin: 0; 
+            font-size: 24px; 
+            font-weight: bold; 
+        }
+        
+        h3 { 
+            margin: 0; 
+            font-size: 18px; 
+            font-weight: bold; 
+        }
+        
+        /* Alert boxes */
+        .alert { 
+            background-color: #fff3cd; 
+            color: #856404; 
+            padding: 15px; 
+            border-radius: 6px; 
+            border-left: 4px solid #ffc107; 
+            margin: 15px 0; 
+        }
+        
+        .critical { 
+            background-color: #f8d7da; 
+            color: #721c24; 
+            padding: 15px; 
+            border-radius: 6px; 
+            border-left: 4px solid #dc3545; 
+            margin: 15px 0; 
+        }
+        
+        .success { 
+            background-color: #d4edda; 
+            color: #155724; 
+            padding: 15px; 
+            border-radius: 6px; 
+            border-left: 4px solid #28a745; 
+            margin: 15px 0; 
+        }
+        
+        /* Responsive metric grid */
+        .metric-grid { 
+            display: grid; 
+            grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); 
+            gap: 15px; 
+            margin: 15px 0; 
+        }
+        
+        .metric-item { 
+            background-color: #f8f9fa; 
+            padding: 15px; 
+            border-radius: 6px; 
+            border: 1px solid #dee2e6; 
+        }
+        
+        .metric-label { 
+            font-weight: bold; 
+            color: #495057; 
+            margin-bottom: 5px;
+            font-size: 0.9em;
+        }
+        
+        .metric-value { 
+            color: #212529; 
+            font-size: 1.1em;
+            word-break: break-word;
+        }
+        
+        /* General sections */
+        .section { 
+            margin: 20px 0; 
+            padding: 15px; 
+            background-color: #f9f9f9; 
+            border-radius: 6px; 
+            border: 1px solid #dee2e6; 
+        }
+        
+        .explanation-box { 
+            background-color: #e3f2fd; 
+            color: #0d47a1; 
+            padding: 15px; 
+            border-radius: 6px; 
+            border-left: 4px solid #2196f3; 
+            margin: 15px 0; 
+        }
+        
+        /* Responsive table */
+        .table-wrapper {
+            overflow-x: auto;
+            -webkit-overflow-scrolling: touch;
+            margin: 10px -15px;
+            padding: 0 15px;
+        }
+        
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            min-width: 400px;
+        }
+        
+        thead tr {
+            background-color: #f8f9fa;
+            border-bottom: 2px solid #dee2e6;
+        }
+        
+        th, td {
+            text-align: left;
+            padding: 8px;
+            white-space: nowrap;
+        }
+        
+        tbody tr {
+            border-bottom: 1px solid #dee2e6;
+        }
+        
+        /* Footer */
+        .footer { 
+            margin-top: 20px; 
+            padding-top: 20px; 
+            border-top: 1px solid #dee2e6; 
+            color: #6c757d; 
+            font-size: 0.9em;
+            text-align: center;
+        }
+        
+        .footer a { 
+            color: #007bff; 
+            text-decoration: none; 
+        }
+        
+        .footer a:hover { 
+            text-decoration: underline; 
+        }
+        
+        /* Utility classes */
+        .code-inline { 
+            background-color: #e9ecef; 
+            color: #212529; 
+            padding: 2px 4px; 
+            border-radius: 3px; 
+            font-family: Courier New, monospace; 
+            font-size: 0.9em;
+            word-break: break-all;
+        }
+        
+        .grade-badge { 
+            display: inline-block; 
+            padding: 4px 12px; 
+            border-radius: 4px; 
+            font-weight: bold; 
+        }
+        
+        /* Mobile optimizations */
+        @media screen and (max-width: 600px) {
+            body {
+                padding: 10px;
+            }
+            
+            .container {
+                padding: 15px;
+                border-radius: 0;
+                box-shadow: none;
+            }
+            
+            .title-header,
+            .section-header {
+                padding: 12px;
+                margin-bottom: 15px;
+            }
+            
+            h1 {
+                font-size: 20px;
+            }
+            
+            h3 {
+                font-size: 16px;
+            }
+            
+            .alert,
+            .critical,
+            .success,
+            .explanation-box {
+                padding: 12px;
+                font-size: 0.95em;
+            }
+            
+            .metric-grid {
+                grid-template-columns: 1fr 1fr;
+                gap: 10px;
+            }
+            
+            .metric-item {
+                padding: 10px;
+            }
+            
+            .metric-label {
+                font-size: 0.85em;
+            }
+            
+            .metric-value {
+                font-size: 1em;
+            }
+            
+            .section {
+                padding: 12px;
+                margin: 15px 0;
+            }
+            
+            /* Make code blocks more readable on mobile */
+            .code-inline {
+                font-size: 0.85em;
+                display: block;
+                margin: 5px 0;
+                padding: 8px;
+            }
+            
+            /* Improve table scroll indicator */
+            .table-wrapper {
+                position: relative;
+                box-shadow: inset -15px 0 15px -15px rgba(0,0,0,0.1);
+            }
+            
+            th, td {
+                font-size: 0.9em;
+                padding: 6px;
+            }
+            
+            /* Stack footer links on mobile */
+            .footer p {
+                margin: 5px 0;
+            }
+            
+            .footer a {
+                display: inline-block;
+                margin: 2px 0;
+            }
+        }
+        
+        @media screen and (max-width: 400px) {
+            .metric-grid {
+                grid-template-columns: 1fr;
+            }
+        }
     </style>
 </head>
 <body>
@@ -564,13 +824,14 @@ EOF
     echo "        <div class='section'>"
     
     if [ "$TOTAL_VMS" -gt 0 ]; then
-        echo "            <table style='width: 100%; border-collapse: collapse; margin-top: 10px;'>"
+        echo "            <div class='table-wrapper'>"
+        echo "            <table>"
         echo "                <thead>"
-        echo "                    <tr style='background-color: #f8f9fa; border-bottom: 2px solid #dee2e6;'>"
-        echo "                        <th style='text-align: left; padding: 8px; font-weight: bold;'>VM ID</th>"
-        echo "                        <th style='text-align: left; padding: 8px; font-weight: bold;'>Name</th>"
-        echo "                        <th style='text-align: left; padding: 8px; font-weight: bold;'>Status</th>"
-        echo "                        <th style='text-align: left; padding: 8px; font-weight: bold;'>DM Health</th>"
+        echo "                    <tr>"
+        echo "                        <th>VM ID</th>"
+        echo "                        <th>Name</th>"
+        echo "                        <th>Status</th>"
+        echo "                        <th>DM Health</th>"
         echo "                    </tr>"
         echo "                </thead>"
         echo "                <tbody>"
@@ -630,16 +891,17 @@ EOF
                 status_html="<span style='color: #6c757d;'>⚪ Stopped</span>"
             fi
             
-            echo "                    <tr style='border-bottom: 1px solid #dee2e6; $row_style'>"
-            echo "                        <td style='padding: 8px;'>$vm_id</td>"
-            echo "                        <td style='padding: 8px;'>${vm_name:0:40}</td>"
-            echo "                        <td style='padding: 8px;'>$status_html</td>"
-            echo "                        <td style='padding: 8px;'>$health_html</td>"
+            echo "                    <tr style='$row_style'>"
+            echo "                        <td>$vm_id</td>"
+            echo "                        <td>${vm_name:0:40}</td>"
+            echo "                        <td>$status_html</td>"
+            echo "                        <td>$health_html</td>"
             echo "                    </tr>"
         done < "$VM_LIST_FILE"
         
         echo "                </tbody>"
         echo "            </table>"
+        echo "            </div>"
         
         rm -f "$VM_ISSUES_FILE" "$VM_DUPLICATES_FILE"
         
