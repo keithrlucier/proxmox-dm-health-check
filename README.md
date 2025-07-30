@@ -1,6 +1,6 @@
 # 🚨 Proxmox Device Mapper Issue Detector & Cleanup Toolkit
 
-**Author**: Keith R. Lucier — keithrlucier@gmail.com  
+**Author**: Keith R. Lucier — ProSource Technology Solutions  
 **Version**: 35  
 **Purpose**: Detect and fix **TRUE DUPLICATE** device mapper entries that cause VM failures
 
