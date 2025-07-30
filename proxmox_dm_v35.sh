@@ -14,7 +14,7 @@
 # Mailjet Configuration
 MAILJET_API_KEY="%API KEY%"
 MAILJET_API_SECRET="%API SECRET%"
-FROM_EMAIL="%EMAIL id%"
+FROM_EMAIL="%FROM EMAIL%"
 FROM_NAME="ProxMox DM Issue Detector"
 TO_EMAIL="%TO EMAIL%"
 
@@ -333,7 +333,8 @@ if [ "$TOTAL_VMS" -gt 0 ]; then
     
     while IFS= read -r vm_line; do
         vm_id=$(echo "$vm_line" | awk '{print $1}')
-        vm_name=$(echo "$vm_line" | awk '{$1=$2=""; print $0}' | xargs)
+        # FIX: Extract VM name properly - get text between status and first numeric field
+        vm_name=$(echo "$vm_line" | sed -E 's/^[0-9]+[[:space:]]+[a-z]+[[:space:]]+([^[:space:]]+([[:space:]]+[^[:space:]0-9]+)*).*/\1/' | xargs)
         vm_status=$(echo "$vm_line" | awk '{print $2}')
         
         # Check health status
@@ -889,7 +890,8 @@ EOF
         # Display each VM
         while IFS= read -r vm_line; do
             vm_id=$(echo "$vm_line" | awk '{print $1}')
-            vm_name=$(echo "$vm_line" | awk '{$1=$2=""; print $0}' | xargs)
+            # FIX: Extract VM name properly - get text between status and first numeric field
+            vm_name=$(echo "$vm_line" | sed -E 's/^[0-9]+[[:space:]]+[a-z]+[[:space:]]+([^[:space:]]+([[:space:]]+[^[:space:]0-9]+)*).*/\1/' | xargs)
             vm_status=$(echo "$vm_line" | awk '{print $2}')
             
             # Check health - duplicates are most critical
@@ -1252,20 +1254,6 @@ if [ "$TOTAL_ISSUES" -gt 0 ]; then
                             echo "  ✗ FAILED: Could not remove"
                         fi
                         ;;
-                    [Nn]* ) 
-                        echo "  ⚠️  Skipped (will continue blocking disk creation)"
-                        SKIPPED_COUNT=$((SKIPPED_COUNT + 1))
-                        ;;
-                    [Aa]* )
-                        echo "  REMOVE ALL: Will remove all remaining entries"
-                        REMOVE_ALL=true
-                        if dmsetup remove "$DM_NAME" 2>/dev/null; then
-                            echo "  ✓ SUCCESS: Removed tombstone"
-                            CLEANED_COUNT=$((CLEANED_COUNT + 1))
-                        else
-                            echo "  ✗ FAILED: Could not remove"
-                        fi
-                        ;;
                     [Qq]* ) 
                         echo ""
                         echo "CLEANUP STOPPED BY USER"
@@ -1307,3 +1295,4 @@ rm -f "$DM_TEMP_FILE" "$CONFIG_TEMP_FILE" "$TOMBSTONED_TEMP_FILE" "$VALID_TEMP_F
 
 echo ""
 echo "Script completed."
+                   
