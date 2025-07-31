@@ -1,5 +1,6 @@
 #!/bin/bash
-# VERSION 35 - Proxmox Device Mapper Issue Detector
+# VERSION 36 - Proxmox Device Mapper Issue Detector
+# NEW IN v36: Added device open safety check before removal attempts
 # CRITICAL FIX v35: Fixed case sensitivity bug - storage pools now compared case-insensitively
 # CRITICAL FIX v34: Fixed tombstone detection to include storage pool comparison
 # CRITICAL FIX v34: Added nvme and mpath disk prefix support
@@ -12,13 +13,13 @@
 # Includes HTML email reporting via Mailjet API with GitHub links
 
 # Mailjet Configuration
-MAILJET_API_KEY="%API KEY%"
-MAILJET_API_SECRET="%API SECRET%"
-FROM_EMAIL="%FROM EMAIL%"
+MAILJET_API_KEY="ENTER API KEY HERE"
+MAILJET_API_SECRET="API SECRET"
+FROM_EMAIL="FROM EMAIL"
 FROM_NAME="ProxMox DM Issue Detector"
-TO_EMAIL="%TO EMAIL%"
+TO_EMAIL="TO EMAIL"
 
-echo "Proxmox Device Mapper Issue Detector v35"
+echo "Proxmox Device Mapper Issue Detector v36"
 echo "Node: $(hostname)"
 echo "Date: $(date)"
 echo "Mode: DUPLICATE & TOMBSTONE DETECTION + OPTIONAL CLEANUP + EMAIL REPORTING"
@@ -26,6 +27,7 @@ echo ""
 echo "IMPORTANT: This tool identifies critical device mapper issues:"
 echo "           • DUPLICATES - Multiple DM entries for same disk (causes VM failures)"
 echo "           • TOMBSTONES - Orphaned DM entries (blocks disk creation)"
+echo "           • NEW: Device open safety check before removal"
 echo ""
 
 # Initialize count variables
@@ -36,6 +38,38 @@ DUPLICATE_COUNT=0
 TOTAL_ISSUES=0
 TOTAL_VMS=0
 RUNNING_VMS_COUNT=0
+DEVICES_IN_USE_COUNT=0
+
+# NEW v36: Function to check if a device mapper device is currently open/in use
+check_device_open() {
+    local dm_name="$1"
+    
+    # Method 1: Check dmsetup info for open count
+    local open_count=$(dmsetup info "$dm_name" 2>/dev/null | grep "Open count:" | awk '{print $3}')
+    
+    if [ -n "$open_count" ] && [ "$open_count" -gt 0 ]; then
+        return 0  # Device is open
+    fi
+    
+    # Method 2: Check if device exists in /dev/mapper and if it's being accessed
+    if [ -e "/dev/mapper/$dm_name" ]; then
+        # Check with lsof if available
+        if command -v lsof >/dev/null 2>&1; then
+            if lsof "/dev/mapper/$dm_name" 2>/dev/null | grep -q "/dev/mapper/$dm_name"; then
+                return 0  # Device is open
+            fi
+        fi
+        
+        # Check with fuser if available
+        if command -v fuser >/dev/null 2>&1; then
+            if fuser -s "/dev/mapper/$dm_name" 2>/dev/null; then
+                return 0  # Device is open
+            fi
+        fi
+    fi
+    
+    return 1  # Device is not open
+}
 
 # Get all VMs on this node with details
 echo "Discovering VMs on this node..."
@@ -76,6 +110,7 @@ DM_TEMP_FILE=$(mktemp)
 CONFIG_TEMP_FILE=$(mktemp)
 TOMBSTONED_TEMP_FILE=$(mktemp)
 VALID_TEMP_FILE=$(mktemp)
+DEVICES_IN_USE_FILE=$(mktemp)
 
 echo "$DM_ENTRIES" > "$DM_TEMP_FILE"
 TOTAL_DM_ENTRIES=$(wc -l < "$DM_TEMP_FILE")
@@ -164,9 +199,23 @@ DM_PARSED_FILE=$(mktemp)
 DUPLICATE_FILE=$(mktemp)
 parse_dm_entries > "$DM_PARSED_FILE"
 
+# NEW v36: Check for devices currently in use
+echo ""
+echo "Step 3: Checking device open status..."
+while IFS= read -r dm_line; do
+    if [[ "$dm_line" =~ ^DM: ]]; then
+        DM_NAME=$(echo "$dm_line" | cut -d: -f5)
+        if check_device_open "$DM_NAME"; then
+            echo "$dm_line" >> "$DEVICES_IN_USE_FILE"
+            DEVICES_IN_USE_COUNT=$((DEVICES_IN_USE_COUNT + 1))
+        fi
+    fi
+done < "$DM_PARSED_FILE"
+echo "   Found $DEVICES_IN_USE_COUNT devices currently in use"
+
 # Check for DUPLICATES first (multiple DM entries for same VM+storage+disk)
 echo ""
-echo "Step 3: Detecting DUPLICATE entries (critical issue!)..."
+echo "Step 4: Detecting DUPLICATE entries (critical issue!)..."
 echo ""
 
 # CRITICAL FIX: Include storage pool in duplicate detection (VM:STORAGE:DISK)
@@ -182,7 +231,12 @@ awk -F: '{print $2":"$3":"$4}' "$DM_PARSED_FILE" | sort | uniq -c | while read c
         # Find all DM entries for this duplicate (matching VM, storage, and disk)
         grep "^DM:${vm_id}:${storage}:${disk_num}:" "$DM_PARSED_FILE" | while IFS= read -r dup_line; do
             dm_name=$(echo "$dup_line" | cut -d: -f5)
-            echo "      - $dm_name"
+            # NEW v36: Check if device is in use
+            if grep -q "^${dup_line}$" "$DEVICES_IN_USE_FILE"; then
+                echo "      - $dm_name [IN USE]"
+            else
+                echo "      - $dm_name"
+            fi
             echo "$dup_line:DUPLICATE" >> "$DUPLICATE_FILE"
         done
         
@@ -196,7 +250,7 @@ fi
 
 # Check each DM entry to see if it's valid, duplicate, or tombstoned
 echo ""
-echo "Step 4: Identifying tombstoned entries..."
+echo "Step 5: Identifying tombstoned entries..."
 echo ""
 
 while IFS= read -r dm_line; do
@@ -244,7 +298,12 @@ while IFS= read -r dm_line; do
         fi
         
         if [ "$IS_TOMBSTONED" = "true" ]; then
-            echo "❌ TOMBSTONE: $DM_NAME"
+            # NEW v36: Note if device is in use
+            IN_USE_MSG=""
+            if grep -q "^${dm_line}$" "$DEVICES_IN_USE_FILE"; then
+                IN_USE_MSG=" [DEVICE IN USE]"
+            fi
+            echo "❌ TOMBSTONE: $DM_NAME$IN_USE_MSG"
             echo "   → $TOMBSTONE_REASON"
             echo "   → This will block VM $VM_ID from creating disk-${DISK_NUM} on storage ${STORAGE}!"
             echo "$dm_line:$TOMBSTONE_REASON" >> "$TOMBSTONED_TEMP_FILE"
@@ -272,6 +331,7 @@ echo "   Total device mapper entries: $TOTAL_DM_ENTRIES"
 echo "   Valid entries: $VALID_DM_ENTRIES $([ "$VALID_DM_ENTRIES" -eq "$TOTAL_DM_ENTRIES" ] && echo "✅ ALL VALID!" || echo "")"
 echo "   Duplicate entries: $DUPLICATE_COUNT $([ "$DUPLICATE_COUNT" -gt 0 ] && echo "🚨 CRITICAL ISSUE!" || echo "✅")"
 echo "   Tombstoned entries: $TOMBSTONED_COUNT $([ "$TOMBSTONED_COUNT" -gt 0 ] && echo "⚠️ WILL BLOCK DISK CREATION!" || echo "✅")"
+echo "   Devices currently in use: $DEVICES_IN_USE_COUNT"
 echo "   Total issues: $TOTAL_ISSUES"
 echo ""
 echo "   VMs on this node: $TOTAL_VMS ($RUNNING_VMS_COUNT running)"
@@ -780,7 +840,7 @@ generate_html_email() {
     <div class='container'>
         <div style='font-size: 0.9em; color: #6c757d; margin-bottom: 20px; border-bottom: 1px solid #dee2e6; padding-bottom: 10px;'>
 EOF
-    echo "            <p>Proxmox Device Mapper Issue Detection Report v35 - $(date '+%Y-%m-%d %H:%M:%S')</p>"
+    echo "            <p>Proxmox Device Mapper Issue Detection Report v36 - $(date '+%Y-%m-%d %H:%M:%S')</p>"
     echo "        </div>"
     echo "        "
     echo "        <div class='title-header' style='background-color: $([ "$TOMBSTONED_COUNT" -gt 20 ] && echo "#dc3545" || [ "$TOMBSTONED_COUNT" -gt 0 ] && echo "#ffc107" || echo "#28a745");'>"
@@ -803,7 +863,7 @@ EOF
             echo "            <strong>⚠️ WARNING:</strong> $TOMBSTONED_COUNT tombstoned entries detected"
             echo "            <p style='margin: 10px 0 0 0;'>These orphaned entries will cause 'Device busy' errors when creating VM disks.</p>"
         fi
-        echo "            <p style='font-size: 0.9em; margin: 10px 0;'>Run cleanup: <span class='code-inline'>./Proxmox_DM_Cleanup_v35.sh</span></p>"
+        echo "            <p style='font-size: 0.9em; margin: 10px 0;'>Run cleanup: <span class='code-inline'>./Proxmox_DM_Cleanup_v36.sh</span></p>"
         echo "        </div>"
     else
         echo "        <div class='success'>"
@@ -817,7 +877,8 @@ EOF
     echo "            <div class='explanation-box'>"
     echo "                <strong>Critical Issues Detected:</strong><br>"
     echo "                • <strong>Duplicate entries:</strong> Multiple DM entries for the same VM disk - causes unpredictable behavior<br>"
-    echo "                • <strong>Tombstoned entries:</strong> Orphaned DM entries for deleted VMs/disks - blocks disk creation"
+    echo "                • <strong>Tombstoned entries:</strong> Orphaned DM entries for deleted VMs/disks - blocks disk creation<br>"
+    echo "                • <strong>NEW - Device open check:</strong> Safety check prevents removal of devices currently in use"
     echo "            </div>"
     echo "            <div class='metric-grid'>"
     echo "                <div class='metric-item'>"
@@ -835,6 +896,10 @@ EOF
     echo "                <div class='metric-item'>"
     echo "                    <div class='metric-label'>Tombstoned Entries</div>"
     echo "                    <div class='metric-value' style='color: $([ "$TOMBSTONED_COUNT" -eq 0 ] && echo "#28a745" || [ "$TOMBSTONED_COUNT" -le 20 ] && echo "#ffc107" || echo "#dc3545");'>$TOMBSTONED_COUNT</div>"
+    echo "                </div>"
+    echo "                <div class='metric-item'>"
+    echo "                    <div class='metric-label'>Devices In Use</div>"
+    echo "                    <div class='metric-value' style='color: #17a2b8;'>$DEVICES_IN_USE_COUNT</div>"
     echo "                </div>"
     echo "            </div>"
     
@@ -981,7 +1046,7 @@ EOF
         fi
         
         echo "                <p style='margin-top: 15px;'><strong>Fix now:</strong> SSH to $(hostname) and run:</p>"
-                        echo "                <p style='margin: 5px 0; padding: 10px; background-color: #f8f9fa; border-radius: 4px; font-family: monospace;'>./Proxmox_DM_Cleanup_v35.sh</p>"
+                        echo "                <p style='margin: 5px 0; padding: 10px; background-color: #f8f9fa; border-radius: 4px; font-family: monospace;'>./Proxmox_DM_Cleanup_v36.sh</p>"
         echo "            </div>"
         echo "        </div>"
     else
@@ -993,11 +1058,9 @@ EOF
     fi
     
     echo "        <div class='footer'>"
-    echo "            <p><strong>ProxMox DM Issue Detector v35</strong></p>"
-    echo "            <p>CRITICAL FIX: Storage pools now compared case-insensitively</p>"
-    echo "            <p>Node: <strong>$(hostname)</strong> • Generated: $(date)</p>"
-    echo "            <p><a href='https://github.com/keithrlucier/proxmox-dm-health-check'>📂 GitHub Repository</a> • <a href='https://github.com/keithrlucier/proxmox-dm-health-check/issues'>🐛 Report Issues</a></p>"
-        echo "        </div>"
+    echo "            <p><strong>ProxMox DM Issue Detector v36</strong></p>"
+        echo "            <p>Node: <strong>$(hostname)</strong> • Generated: $(date)</p>"
+            echo "        </div>"
     echo "    </div>"
     echo "</body>"
     echo "</html>"
@@ -1148,6 +1211,14 @@ if [ "$TOTAL_ISSUES" -gt 0 ]; then
                     else
                         CURRENT_ENTRY=$((CURRENT_ENTRY + 1))
                         
+                        # NEW v36: Check if device is open before attempting removal
+                        if check_device_open "$dm_name"; then
+                            echo "  ⚠️  DUPLICATE: $dm_name [DEVICE IS CURRENTLY OPEN/IN USE]"
+                            echo "     → Cannot remove while device is in use. Stop the VM first."
+                            SKIPPED_COUNT=$((SKIPPED_COUNT + 1))
+                            continue
+                        fi
+                        
                         if [ "$REMOVE_ALL" = "true" ]; then
                             echo "  🗑️  Auto-removing duplicate: $dm_name"
                             if dmsetup remove "$dm_name" 2>/dev/null; then
@@ -1166,20 +1237,6 @@ if [ "$TOTAL_ISSUES" -gt 0 ]; then
                             case $entry_choice in
                                 [Yy]* | "") 
                                     echo "     Executing: dmsetup remove $dm_name"
-                                    if dmsetup remove "$dm_name" 2>/dev/null; then
-                                        echo "     ✓ SUCCESS: Removed duplicate"
-                                        CLEANED_COUNT=$((CLEANED_COUNT + 1))
-                                    else
-                                        echo "     ✗ FAILED: Could not remove"
-                                    fi
-                                    ;;
-                                [Nn]* ) 
-                                    echo "     ⚠️  WARNING: Keeping duplicate - VM FAILURES LIKELY!"
-                                    SKIPPED_COUNT=$((SKIPPED_COUNT + 1))
-                                    ;;
-                                [Aa]* )
-                                    echo "     REMOVE ALL: Will remove all remaining duplicates"
-                                    REMOVE_ALL=true
                                     if dmsetup remove "$dm_name" 2>/dev/null; then
                                         echo "     ✓ SUCCESS: Removed duplicate"
                                         CLEANED_COUNT=$((CLEANED_COUNT + 1))
@@ -1222,6 +1279,20 @@ if [ "$TOTAL_ISSUES" -gt 0 ]; then
                 
                 CURRENT_TOMBSTONE=$((CURRENT_TOMBSTONE + 1))
                 
+                # NEW v36: Check if device is open before attempting removal
+                if check_device_open "$DM_NAME"; then
+                    echo "----------------------------------------"
+                    echo "TOMBSTONE $CURRENT_TOMBSTONE of $TOMBSTONED_COUNT:"
+                    echo "  Device: $DM_NAME [DEVICE IS CURRENTLY OPEN/IN USE]"
+                    echo "  VM ID: $VM_ID, Storage: $STORAGE, Disk: $DISK_NUM"
+                    echo "  Reason: $REASON"
+                    echo ""
+                    echo "  ⚠️  Cannot remove while device is in use!"
+                    echo ""
+                    SKIPPED_COUNT=$((SKIPPED_COUNT + 1))
+                    continue
+                fi
+                
                 # If remove all is set, just remove without prompting
                 if [ "$REMOVE_ALL" = "true" ]; then
                     echo "[$CURRENT_TOMBSTONE/$TOMBSTONED_COUNT] Auto-removing: $DM_NAME"
@@ -1247,6 +1318,20 @@ if [ "$TOTAL_ISSUES" -gt 0 ]; then
                 case $entry_choice in
                     [Yy]* | "") 
                         echo "  Executing: dmsetup remove $DM_NAME"
+                        if dmsetup remove "$DM_NAME" 2>/dev/null; then
+                            echo "  ✓ SUCCESS: Removed tombstone"
+                            CLEANED_COUNT=$((CLEANED_COUNT + 1))
+                        else
+                            echo "  ✗ FAILED: Could not remove"
+                        fi
+                        ;;
+                    [Nn]* ) 
+                        echo "  ⚠️  Skipped (will continue blocking disk creation)"
+                        SKIPPED_COUNT=$((SKIPPED_COUNT + 1))
+                        ;;
+                    [Aa]* )
+                        echo "  REMOVE ALL: Will remove all remaining entries"
+                        REMOVE_ALL=true
                         if dmsetup remove "$DM_NAME" 2>/dev/null; then
                             echo "  ✓ SUCCESS: Removed tombstone"
                             CLEANED_COUNT=$((CLEANED_COUNT + 1))
@@ -1291,8 +1376,7 @@ if [ "$TOTAL_ISSUES" -gt 0 ]; then
 fi
 
 # Clean up temp files
-rm -f "$DM_TEMP_FILE" "$CONFIG_TEMP_FILE" "$TOMBSTONED_TEMP_FILE" "$VALID_TEMP_FILE" "$DM_PARSED_FILE" "$VM_LIST_FILE" "$DUPLICATE_FILE" 2>/dev/null || true
+rm -f "$DM_TEMP_FILE" "$CONFIG_TEMP_FILE" "$TOMBSTONED_TEMP_FILE" "$VALID_TEMP_FILE" "$DM_PARSED_FILE" "$VM_LIST_FILE" "$DUPLICATE_FILE" "$DEVICES_IN_USE_FILE" 2>/dev/null || true
 
 echo ""
 echo "Script completed."
-                   

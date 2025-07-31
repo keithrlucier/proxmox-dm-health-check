@@ -4,6 +4,8 @@
 
 The Proxmox Device Mapper Health Check is an enterprise-grade diagnostic and remediation tool designed to maintain the integrity of device mapper entries in Proxmox Virtual Environment (PVE) clusters. The tool identifies and resolves critical device mapper inconsistencies that can cause virtual machine failures, data corruption, and operational disruptions.
 
+**Version 36 Enhancement**: Introduces device open safety checks to prevent removal of in-use device mapper entries, ensuring system stability during cleanup operations.
+
 ### Key Operational Context
 
 In Proxmox VE:
@@ -113,7 +115,47 @@ DM Entry Analysis:
 └── Build comprehensive mapping table
 ```
 
-### 3. Configuration Validation
+### 3. Device Open Safety Check (NEW in v36)
+
+Before any analysis or remediation, the tool now performs device open status verification:
+
+```
+Device Open Check:
+├── For each device mapper entry:
+│   ├── Query open count via dmsetup info
+│   ├── Check for file handles using lsof (if available)
+│   ├── Verify with fuser (if available)
+│   └── Mark devices as "IN USE" if open
+├── Track total devices in use
+└── Store open status for cleanup safety
+```
+
+#### Device Open Detection Methods
+
+The tool uses multiple methods to ensure accurate detection of in-use devices:
+
+1. **Primary Method - dmsetup info**:
+   ```bash
+   dmsetup info <device-name> | grep "Open count:"
+   ```
+   - Returns the number of open references to the device
+   - Most reliable method for device mapper entries
+
+2. **Secondary Method - lsof**:
+   ```bash
+   lsof /dev/mapper/<device-name>
+   ```
+   - Identifies processes with open file handles
+   - Provides additional validation
+
+3. **Tertiary Method - fuser**:
+   ```bash
+   fuser /dev/mapper/<device-name>
+   ```
+   - Quick check for device usage
+   - Fallback when lsof is unavailable
+
+### 4. Configuration Validation
 
 Each VM's configuration is parsed to build the expected device mapper state:
 
@@ -129,7 +171,7 @@ Configuration Parsing:
 └── Create expected DM entry list
 ```
 
-### 4. Issue Detection Algorithm
+### 5. Issue Detection Algorithm
 
 #### Duplicate Detection Logic
 
@@ -140,6 +182,10 @@ for each unique (vm_id, storage_pool, disk_number):
     if entry_count > 1:
         mark_as_duplicate(all_but_first_entry)
         set_severity = CRITICAL
+        # NEW in v36: Note which duplicates are in use
+        for each duplicate_entry:
+            if is_device_open(duplicate_entry):
+                mark_as_in_use()
 ```
 
 Duplicates are identified when multiple device mapper entries exist for the same combination of:
@@ -158,6 +204,9 @@ for each dm_entry:
         mark_as_orphan("VM does not exist on this node")
     elif (vm_id, storage_pool, disk_num) not in vm_configurations:
         mark_as_orphan("Disk not in VM configuration")
+    # NEW in v36: Check if orphan is in use
+    if is_orphan and is_device_open(dm_entry):
+        mark_as_in_use_orphan()
 ```
 
 Orphaned entries are identified when:
@@ -167,7 +216,7 @@ Orphaned entries are identified when:
 
 **Important**: A VM may exist in the Proxmox cluster on a different node, but if it's not configured to run on the current node, its device mapper entries are considered orphaned on this node.
 
-### 5. Health Assessment
+### 6. Health Assessment
 
 The system calculates a comprehensive health score:
 
@@ -185,7 +234,12 @@ Health Score Calculation:
     └── F:  Any duplicates OR 50+ orphaned entries
 ```
 
-### 6. Reporting Engine
+**NEW in v36**: The health assessment now includes device open status information:
+- Total devices currently in use
+- Which problematic entries cannot be immediately cleaned
+- Safety warnings for cleanup operations
+
+### 7. Reporting Engine
 
 The reporting system generates comprehensive HTML reports including:
 
@@ -193,28 +247,90 @@ The reporting system generates comprehensive HTML reports including:
 - **Issue Analysis**: Detailed breakdown of detected problems
 - **VM Status Matrix**: Health status for each VM
 - **System Metrics**: CPU, memory, storage utilization
-- **Remediation Guidance**: Specific cleanup instructions
+- **Device Open Status** (NEW): Count and identification of in-use devices
+- **Remediation Guidance**: Specific cleanup instructions with safety warnings
 
-### 7. Remediation Workflow
+### 8. Enhanced Remediation Workflow (v36)
 
-When issues are detected, the tool offers a priority-based cleanup process:
+The cleanup process now includes comprehensive safety checks:
 
 ```
-Cleanup Priority:
+Safe Cleanup Priority:
 1. Critical Issues (Duplicates)
    ├── Display all duplicates grouped by VM/storage/disk
+   ├── Check device open status for each duplicate
+   ├── Skip devices marked as [DEVICE IS CURRENTLY OPEN/IN USE]
    ├── Preserve first entry (original)
-   ├── Remove subsequent duplicates
-   └── Confirm each removal action
+   ├── Remove only safe duplicates
+   └── Log skipped devices with explanations
 
-2. **Warning Issues (Orphans)
+2. Warning Issues (Orphans)
    ├── Display orphaned entries with reasons
+   ├── Check device open status for each orphan
+   ├── Skip devices marked as [DEVICE IS CURRENTLY OPEN/IN USE]
    ├── Show impact (will block automatic VM ID reuse)
-   ├── Remove orphaned entries
-   └── Confirm each removal action
+   ├── Remove only safe orphaned entries
+   └── Log skipped devices with explanations
+```
+
+#### Safety Features in Cleanup
+
+1. **Pre-removal Check**: Every device is checked for open status before removal attempt
+2. **Automatic Skip**: Devices in use are automatically skipped with clear messaging
+3. **VM Protection**: Running VMs' devices are protected from accidental removal
+4. **Clear Warnings**: Users are informed why specific devices cannot be removed
+5. **No Force Option**: The tool never forces removal of open devices
+
+Example cleanup interaction with safety check:
+```
+----------------------------------------
+🚨 DUPLICATE SET for VM 169 storage ssd-ha01 disk-0:
+
+  ✅ KEEP: ssd--ha01-vm--169--disk--0 (first entry)
+  ⚠️  DUPLICATE: ssd--ha01-vm--169--disk--0-copy [DEVICE IS CURRENTLY OPEN/IN USE]
+     → Cannot remove while device is in use. Stop the VM first.
+  ❌ DUPLICATE: ssd--ha01-vm--169--disk--0-old
+
+Remove this duplicate? (y/n/a=all/q=quit) [STRONGLY RECOMMENDED: y]:
 ```
 
 ## Technical Implementation Details
+
+### Device Open Safety Implementation (v36)
+
+The `check_device_open()` function implements a multi-layered approach:
+
+```bash
+check_device_open() {
+    local dm_name="$1"
+    
+    # Method 1: Check dmsetup info for open count
+    local open_count=$(dmsetup info "$dm_name" 2>/dev/null | grep "Open count:" | awk '{print $3}')
+    
+    if [ -n "$open_count" ] && [ "$open_count" -gt 0 ]; then
+        return 0  # Device is open
+    fi
+    
+    # Method 2: Check if device exists and is being accessed
+    if [ -e "/dev/mapper/$dm_name" ]; then
+        # Check with lsof if available
+        if command -v lsof >/dev/null 2>&1; then
+            if lsof "/dev/mapper/$dm_name" 2>/dev/null | grep -q "/dev/mapper/$dm_name"; then
+                return 0  # Device is open
+            fi
+        fi
+        
+        # Check with fuser if available
+        if command -v fuser >/dev/null 2>&1; then
+            if fuser -s "/dev/mapper/$dm_name" 2>/dev/null; then
+                return 0  # Device is open
+            fi
+        fi
+    fi
+    
+    return 1  # Device is not open
+}
+```
 
 ### Storage Pool Name Resolution
 
@@ -242,6 +358,8 @@ Supported disk types include:
 2. **Confirmation Prompts**: Each removal action requires user confirmation
 3. **Batch Operations**: Option to approve all remaining actions
 4. **Graceful Exit**: Cleanup can be cancelled at any point
+5. **Device Open Protection** (NEW): Prevents removal of in-use devices
+6. **Running VM Protection** (NEW): Automatically skips devices belonging to running VMs
 
 ## Deployment and Usage
 
@@ -255,14 +373,16 @@ Supported disk types include:
 
 4. **After Failed Operations**: Following failed migrations, incomplete deletions, or storage detachments
 
+5. **Before Major Operations** (NEW): Run analysis to identify devices in use before planning maintenance
+
 ### Installation
 
 ```bash
 # Download the latest version
-wget https://raw.githubusercontent.com/keithrlucier/proxmox-dm-health-check/main/Proxmox_DM_Cleanup_v35.sh
+wget https://raw.githubusercontent.com/keithrlucier/proxmox-dm-health-check/main/Proxmox_DM_Cleanup_v36.sh
 
 # Set execution permissions
-chmod +x Proxmox_DM_Cleanup_v35.sh
+chmod +x Proxmox_DM_Cleanup_v36.sh
 ```
 
 ### VM ID Assignment Configuration
@@ -295,7 +415,7 @@ TO_EMAIL="infrastructure-team@company.com"
 
 #### 1. Analysis Only (Default)
 ```bash
-./Proxmox_DM_Cleanup_v35.sh
+./Proxmox_DM_Cleanup_v36.sh
 ```
 Performs analysis and sends report without modifications.
 
@@ -308,12 +428,12 @@ Do you want to interactively clean up these issues? (y/N): y
 #### 3. Automated Monitoring
 Add to crontab for daily checks:
 ```bash
-0 2 * * * /root/Proxmox_DM_Cleanup_v35.sh > /var/log/proxmox_dm_check.log 2>&1
+0 2 * * * /root/Proxmox_DM_Cleanup_v36.sh > /var/log/proxmox_dm_check.log 2>&1
 ```
 
 ## Output Interpretation
 
-### Console Output Structure
+### Console Output Structure (Enhanced in v36)
 
 ```
 ========================================
@@ -323,6 +443,7 @@ ANALYSIS SUMMARY
    Valid entries: 481
    Duplicate entries: 2 [CRITICAL ISSUE]
    Tombstoned entries: 4 [WARNING]
+   Devices currently in use: 3
    Total issues: 6
 
    VMs on this node: 45 (42 running)
@@ -338,6 +459,13 @@ VM ID    NAME                           STATUS       DM HEALTH
 171      Backup Server                  Stopped      [!] 2 tombstone(s)
 ```
 
+### Device Status Indicators (NEW in v36)
+
+During analysis and cleanup, devices show their open status:
+- `[IN USE]` - Device is currently open and cannot be removed
+- `[DEVICE IS CURRENTLY OPEN/IN USE]` - Detailed warning during cleanup
+- No indicator - Device is safe to remove
+
 ### Email Report Components
 
 The HTML email report includes:
@@ -351,16 +479,19 @@ The HTML email report includes:
    - Critical issues requiring immediate attention
    - Warning issues affecting operations
    - Detailed impact analysis
+   - **Device open status summary** (NEW)
 
 3. **System Metrics**
    - Resource utilization
    - VM statistics
    - Storage usage
+   - **Devices in use count** (NEW)
 
 4. **Remediation Instructions**
    - Specific commands to execute
    - Expected outcomes
    - Safety considerations
+   - **Device availability warnings** (NEW)
 
 ## Best Practices
 
@@ -370,16 +501,19 @@ The HTML email report includes:
    - Schedule daily automated checks
    - Review reports for trending issues
    - Address critical issues immediately
+   - Monitor devices in use patterns
 
 2. **Maintenance Windows**
    - Perform cleanup during scheduled maintenance
    - Ensure recent backups exist
    - Document all remediation actions
+   - **Stop affected VMs before cleanup** (NEW recommendation)
 
 3. **Cluster Coordination**
    - Run on all nodes sequentially
    - Coordinate with migration operations
    - Monitor cluster-wide health trends
+   - **Check device status before migrations** (NEW)
 
 4. **Understanding Orphaned Entry Persistence**
    - Remember that orphaned entries survive system reboots
@@ -395,6 +529,7 @@ To minimize orphaned entries:
    - Always use proper Proxmox VM deletion commands
    - Run this cleanup tool immediately after VM deletions
    - Understand that Proxmox will reuse the deleted VM's ID for the next VM creation
+   - **Ensure VMs are stopped before deletion** (NEW emphasis)
 
 2. **VM Creation Process**
    - Be aware that Proxmox automatically assigns the lowest available VM ID
@@ -405,6 +540,7 @@ To minimize orphaned entries:
    - Check source node for orphaned entries after migration
    - Clean up any remaining entries on the source node
    - Document which nodes have hosted specific VMs
+   - **Verify no devices are in use before migration** (NEW)
 
 4. **Understanding Device Mapper Behavior**
    - Device mapper entries are created when VMs start (normal) or at boot (v8.2.2+ bug)
@@ -412,9 +548,11 @@ To minimize orphaned entries:
    - Entries persist for the lifetime of the VM (whether running or stopped) until properly cleaned
    - Orphaned entries occur when VM deletion or disk removal doesn't properly clean up the device mapper
    - Orphaned entries will conflict with Proxmox's automatic ID assignment
+   - **Devices remain open while VMs are running** (NEW insight)
    - **Known Issues**: 
      - Automatic cleanup frequently fails, especially with partition tables or complex storage
      - Proxmox 8.2.2+ creates entries for all LVM volumes at boot, increasing orphaned entries
+     - Running VMs keep device mapper entries open, preventing cleanup
 
 ### Risk Mitigation
 
@@ -423,17 +561,20 @@ To minimize orphaned entries:
    - Document existing issues
    - Test in non-production environment
    - **Critical Check**: Ensure device "Open count" is 0 before removal (use `dmsetup info <device>`)
+   - **NEW**: Tool now performs this check automatically
 
 2. **During Cleanup**
    - Review each action carefully
    - Monitor system logs
    - Be prepared to halt if unexpected behavior occurs
    - **Order Matters**: Remove child devices (e.g., vm-disk-0p1) before parent devices (vm-disk-0)
+   - **NEW**: Tool automatically skips open devices, preventing errors
 
 3. **Post-Cleanup Verification**
    - Verify VM functionality
    - Check storage accessibility
    - Run analysis to confirm resolution
+   - **Verify no devices remain unexpectedly open** (NEW)
 
 ### Preventive Configuration
 
@@ -464,6 +605,11 @@ vgchange <VG_NAME> --setautoactivation n
 - **Cause**: Device mapper entry already removed or locked
 - **Solution**: Verify entry exists with `dmsetup ls` command
 
+#### Device Cannot Be Removed (NEW in v36)
+- **Cause**: Device is currently open/in use by a running VM or process
+- **Solution**: Stop the VM using the device, then retry cleanup
+- **Prevention**: The tool now automatically detects and skips these devices
+
 #### High Number of Orphaned Entries
 - **Cause**: Improper VM deletion procedures or cluster migrations
 - **Solution**: Review and update VM lifecycle management procedures
@@ -481,6 +627,15 @@ vgchange <VG_NAME> --setautoactivation n
 - **Prevention**: Always clean orphaned entries after VM deletions to avoid future conflicts
 - **Diagnostic**: Use `dmsetup table | grep <VMID>` to find conflicting entries
 
+#### Devices Show as "IN USE" During Cleanup (NEW)
+- **Cause**: VM is running or device has open file handles
+- **Solution**: 
+  1. Identify which VM uses the device
+  2. Stop the VM gracefully
+  3. Re-run the cleanup tool
+  4. If device remains open, check for stuck processes with `lsof /dev/mapper/<device>`
+- **Note**: This is a safety feature, not an error
+
 ## Security Considerations
 
 ### Access Control
@@ -492,6 +647,7 @@ vgchange <VG_NAME> --setautoactivation n
 - No VM data is modified or accessed
 - Only device mapper metadata is affected
 - Email reports may contain infrastructure details
+- **Device open checks prevent accidental data loss** (NEW)
 
 ## Support and Maintenance
 
@@ -500,6 +656,7 @@ vgchange <VG_NAME> --setautoactivation n
 - Root access to Proxmox nodes
 - Standard Linux utilities (dmsetup, qm, awk, sed)
 - Optional: Python 3.x for enhanced email encoding
+- Optional but recommended: lsof and fuser for device open detection
 
 ### External Dependencies
 - Mailjet API for email delivery (optional)
@@ -526,12 +683,32 @@ Examples:
 
 ### Key Commands Used
 - `dmsetup ls` - List device mapper entries
+- `dmsetup info <entry>` - Get device information including open count
 - `dmsetup remove <entry>` - Remove device mapper entry
 - `qm list` - List all VMs on node
 - `pct list` - List all containers on node
+- `lsof /dev/mapper/<entry>` - Check for open file handles (NEW in v36)
+- `fuser /dev/mapper/<entry>` - Quick device usage check (NEW in v36)
+
+### Device Open Status Detection (NEW in v36)
+
+The tool uses a hierarchical approach to detect device usage:
+
+1. **Primary Detection**: `dmsetup info` open count
+   - Most reliable for device mapper entries
+   - Shows exact number of open references
+
+2. **Secondary Detection**: `lsof` file handle check
+   - Identifies specific processes using the device
+   - Provides detailed usage information
+
+3. **Tertiary Detection**: `fuser` quick check
+   - Fast boolean check for device usage
+   - Fallback when lsof unavailable
 
 ---
 
-**Document Version**: 1.0  
+**Document Version**: 1.1  
 **Last Updated**: November 2024  
+**Latest Version**: 36 (Device Open Safety)  
 **Classification**: Internal Use Only
