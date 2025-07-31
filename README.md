@@ -1,467 +1,338 @@
-# 🚨 Proxmox Device Mapper Issue Detector & Cleanup Toolkit
+# Proxmox Device Mapper Health Check
 
-**Author**: Keith R. Lucier — ProSource Technology Solutions  
-**Version**: 35  
-**Purpose**: Detect and fix **TRUE DUPLICATE** device mapper entries that cause VM failures
+**Enterprise Device Mapper Management for Proxmox Virtual Environment**
 
----
-
-## ⚠️ IMPORTANT DISCLAIMER - USE AT YOUR OWN RISK
-
-**This script directly modifies device mapper entries which are critical to VM operations. While designed with safety features and confirmation prompts, YOU USE THIS SCRIPT ENTIRELY AT YOUR OWN RISK.**
-
-- **NO WARRANTY**: Provided "AS IS" without warranty of any kind
-- **NO SUPPORT**: No support is offered or implied
-- **YOUR RESPONSIBILITY**: You bear full responsibility for any outcomes
-- **BACKUP FIRST**: Always ensure proper backups before running cleanup
-- **TEST FIRST**: Test in non-production environments before production use
+Version 35 | Enterprise Edition  
+Author: Keith R. Lucier — ProSource Technology Solutions
 
 ---
 
-## 🎯 Critical Issue Focus
+## Executive Summary
 
-This toolkit primarily targets **DUPLICATE DEVICE MAPPER ENTRIES** - the #1 cause of VM failures in Proxmox environments. When multiple device mapper entries exist for the same VM disk **on the same storage pool**, it causes:
+The Proxmox Device Mapper Health Check is an enterprise-grade diagnostic and remediation tool designed to identify and resolve critical device mapper inconsistencies in Proxmox VE clusters. The tool addresses a fundamental issue in Proxmox environments where device mapper entries fail to be properly cleaned up, causing virtual machine failures and operational disruptions.
 
-- ❌ **Unpredictable VM behavior**
-- ❌ **"Device or resource busy" errors**  
-- ❌ **VM startup failures**
-- ❌ **Potential data corruption**
+### Primary Capabilities
 
-**Version 35 accurately detects ONLY TRUE duplicates and tombstones** - with proper storage pool verification and case-insensitive comparison to eliminate false positives.
+- **Critical Issue Detection**: Identifies duplicate device mapper entries that cause VM failures
+- **Orphaned Entry Management**: Detects and removes stale entries blocking VM operations
+- **Enterprise Reporting**: Generates comprehensive HTML reports with actionable insights
+- **Automated Monitoring**: Integrates with cron for continuous health assessment
+- **Safe Remediation**: Provides controlled, user-confirmed cleanup procedures
 
----
+### Business Impact
 
-## 🚀 Overview
+Device mapper issues in Proxmox can result in:
+- Virtual machine startup failures
+- Service availability disruptions
+- Resource allocation conflicts
+- Operational inefficiencies requiring manual intervention
 
-The Proxmox Device Mapper Issue Detector is a professionally engineered Bash script that identifies and resolves device mapper problems that cause VM failures. It performs comprehensive analysis, provides VM-specific health status, and offers safe interactive cleanup of problematic entries.
-
-**Key Focus Areas:**
-- 🚨 **TRUE DUPLICATE ENTRIES** (Critical): Multiple DM entries for same VM disk on same storage
-- ⚠️ **TOMBSTONED ENTRIES** (Warning): Orphaned entries that block disk creation
-- ✅ **ACCURATE DETECTION** (v35): No false positives - handles case differences correctly
-
-**🆕 Critical Fixes in v32/v33/v34/v35:**
-- **v32**: Fixed false positive duplicates for different storage pools
-- **v33**: Fixed storage pool extraction for accurate detection
-- **v34**: Fixed false positive tombstones + added nvme/mpath support
-- **v35**: Fixed case sensitivity bug for uppercase storage pools
+This tool provides automated detection and remediation capabilities to minimize these impacts.
 
 ---
 
-## 🔍 What It Does
+## Technical Overview
 
-### Primary Detection & Analysis
-- 🚨 **Detects TRUE DUPLICATE device mapper entries** (same VM, storage, and disk)
-- ✅ **Correctly handles multi-storage VMs** (e.g., EFI on one pool, data on another)
-- ⚠️ **Identifies TRUE tombstoned entries** (with storage pool verification)
-- 🎯 **Case-insensitive comparison** (v35) - handles T1-HA07 vs t1--ha07 correctly
-- 📊 **VM health dashboard** showing status for each VM on the node
-- ✅ **Single-pass analysis** with accurate issue counting
-- 📧 **Professional HTML reports** with color-coded severity levels
-- 🔧 **Priority-based cleanup** (duplicates first, then tombstones)
+### Problem Domain
 
-### VM Status Dashboard
-Shows for every VM on the node:
-- **VM ID & Name**
-- **Running Status** (🟢 Running / ⚪ Stopped)
-- **DM Health**:
-  - ✅ Clean
-  - 🚨 X storage:disk(s) DUPLICATED!
-  - ⚠️ X tombstone(s)
+Proxmox VE utilizes Linux device mapper for virtual disk management. Due to persistent bugs in the cleanup process, device mapper entries often remain after VM deletion or migration, creating two primary issue types:
 
-### System Health Grading
-- **A+**: Perfect health (no issues)
-- **B-D**: Tombstones only (varying severity)
-- **F**: ANY duplicates detected (critical failure)
+1. **Duplicate Entries**: Multiple device mapper entries for the same VM disk on the same storage pool
+2. **Orphaned Entries**: Device mapper entries without corresponding VM configurations
 
----
+### Key Technical Context
 
-## ✨ Key Features
+- VM IDs are automatically assigned using the lowest available number (range: 100-1,000,000)
+- Device mapper entries should be automatically removed when VMs stop/delete (but often aren't due to bugs)
+- Entries persist through system reboots and require manual cleanup
+- Proxmox 8.2.2+ has a regression creating entries for ALL LVM volumes at boot
 
-### Accurate Issue Detection (v35 Perfected)
-- 🚨 **True Duplicate Detection** - Finds multiple DM entries for same VM+storage+disk
-- ✅ **Multi-Storage Support** - Correctly handles VMs with disks on different storage pools
-- ⚠️ **True Tombstone Detection** - Identifies orphaned entries with storage pool verification
-- 🎯 **Case-Insensitive Matching** - No false positives from uppercase storage names
-- 📊 **VM-Centric Analysis** - Shows health status per VM
-- 🎯 **Zero False Positives** - No incorrect flagging of legitimate configurations
-- 🆕 **Extended Disk Support** - Now recognizes nvme and mpath disk types
+### Solution Architecture
 
-### Reporting & Monitoring
-- 📧 **HTML Email Reports** via Mailjet API
-- 🎨 **Color-Coded Severity** (Red=Critical, Yellow=Warning, Green=Good)
-- 📈 **Performance Metrics** (CPU, RAM, uptime, storage)
-- 🏆 **Health Grade** (A+ to F based on issue severity)
-- 🔗 **GitHub Links** for documentation and issue tracking
+The tool implements a multi-phase approach:
 
-### Safe Interactive Cleanup
-- 🔒 **Read-only by default** - No changes without consent
-- 📝 **Detailed explanations** for each issue before removal
-- 🎯 **Priority handling** - Critical duplicates cleaned first
-- ✅ **User confirmation** required for each action
+1. **Discovery Phase**: Comprehensive inventory of VMs and device mapper entries
+2. **Analysis Phase**: Cross-reference validation between VM configurations and device mapper state
+3. **Reporting Phase**: Generation of detailed health reports with severity classification
+4. **Remediation Phase**: Optional interactive cleanup with safety controls
 
 ---
 
-## 🎯 Understanding Critical Issues
+## Disclaimer and Support
 
-### 🚨 TRUE Duplicate Device Mapper Entries (CRITICAL)
+**IMPORTANT**: This software is provided "AS IS" without warranty of any kind, express or implied. Use of this tool is entirely at your own risk. The author and ProSource Technology Solutions assume no liability for any damages or losses resulting from the use of this software.
 
-**TRUE Duplicate Example:**
-```
-VM 169 config shows: scsi0: ssd-ha01:vm-169-disk-0
+### Support Model
 
-Device mapper has:
-  ssd--ha01-vm--169--disk--0  ✓ (correct)
-  ssd--ha01-vm--169--disk--0  ❌ (DUPLICATE on same storage!)
-```
+- **Commercial Support**: Not available
+- **Community Resources**: GitHub repository for issue tracking and documentation
+- **Warranty**: None provided
+- **Liability**: User assumes all risks
 
-**NOT a Duplicate (v35 handles correctly):**
-```
-VM 119 config shows: 
-  efidisk0: SSD-HA07:vm-119-disk-0  (EFI disk)
-  scsi1: SSD-HA01:vm-119-disk-0     (Data disk)
+### Prerequisites for Use
 
-Device mapper has:
-  ssd--ha07-vm--119--disk--0  ✅ (EFI on HA07 - VALID)
-  ssd--ha01-vm--119--disk--0  ✅ (Data on HA01 - VALID)
-```
-
-**Impact of TRUE Duplicates:**
-- Causes unpredictable VM behavior
-- Results in "Device busy" errors
-- Can corrupt VM operations
-- **Requires immediate cleanup**
-
-### ⚠️ TRUE Tombstoned Entries (WARNING)
-
-**TRUE Tombstone Example (v35):**
-```
-Device mapper has: ssd--ha01-vm--119--disk--0
-VM 119 config shows NO disk-0 on storage ssd-ha01 (or SSD-HA01)
-Result: ❌ TOMBSTONE (correctly identified)
-```
-
-**NOT a Tombstone (v35 fixes case sensitivity):**
-```
-Config shows: T1-HA07:vm-115-disk-0 (uppercase)
-Device mapper has: t1--ha07-vm--115--disk--0 (lowercase)
-Result: ✅ VALID (v35 correctly matches despite case difference)
-```
-
-**Impact:**
-- Blocks creation of new VMs with that ID
-- Prevents disk creation with conflicting names
-- Wastes system resources
-- **Should be cleaned during maintenance**
+- Current backups of all virtual machines
+- Understanding of Proxmox storage architecture
+- Root access to Proxmox nodes
+- Testing in non-production environment recommended
 
 ---
 
-## 📁 Installation
+## Installation and Deployment
 
-### Option 1: Download from GitHub
+### System Requirements
+
+- Proxmox VE 6.x or higher
+- Root access to Proxmox nodes
+- Standard Linux utilities (pre-installed on Proxmox)
+- Optional: Mailjet API credentials for email reporting
+
+### Installation Methods
+
+#### Method 1: Direct Download
 ```bash
-# Download latest version
+# Download from GitHub repository
 wget https://raw.githubusercontent.com/keithrlucier/proxmox-dm-health-check/main/Proxmox_DM_Cleanup_v35.sh
 
-# Make executable
+# Set execution permissions
 chmod +x Proxmox_DM_Cleanup_v35.sh
-
-# Run analysis
-./Proxmox_DM_Cleanup_v35.sh
 ```
 
-### Option 2: Manual Creation
+#### Method 2: Manual Deployment
 ```bash
-# Create/edit the script
+# Create script location
 nano /root/Proxmox_DM_Cleanup_v35.sh
 
-# Make executable
+# Copy script content and save
+# Set execution permissions
 chmod +x /root/Proxmox_DM_Cleanup_v35.sh
-
-# Run analysis
-./Proxmox_DM_Cleanup_v35.sh
 ```
 
----
+### Configuration
 
-## 🕒 Schedule Daily Checks (10 PM)
-
-```bash
-crontab -e
-```
-
-Add this line:
-```bash
-0 22 * * * /root/Proxmox_DM_Cleanup_v35.sh > /var/log/proxmox_dm_check.log 2>&1
-```
-
----
-
-## 📊 Sample Output (v35 Accurate Detection)
-
-### VM Status Section (v35 - no false positives)
-```
-🖥️  VM STATUS ON THIS NODE
-=========================================
-
-VM ID    NAME                           STATUS       DM HEALTH
------    ----                           ------       ---------
-115      Windows Server 2019            🟢 Running   ✅ Clean
-119      Multi-Storage VM               🟢 Running   ✅ Clean
-125      Ubuntu 22.04 LTS               ⚪ Stopped   ✅ Clean
-138      Development Server             ⚪ Stopped   ✅ Clean
-145      Database Server                🟢 Running   ✅ Clean
-191      Web Server                     ⚪ Stopped   ✅ Clean
-
-Additionally, tombstones exist for 29 non-existent VM IDs:
-   VM 198   : 2 tombstone(s) ❌ VM DOES NOT EXIST
-   VM 188   : 2 tombstone(s) ❌ VM DOES NOT EXIST
-```
-
-### Critical Issue Detection (v35 with case-insensitive matching)
-```
-🔍 ANALYZING DEVICE MAPPER ISSUES
-=========================================
-
-Step 3: Detecting DUPLICATE entries (critical issue!)...
-
-✅ No duplicate entries found
-
-Step 4: Identifying tombstoned entries...
-
-❌ TOMBSTONE: t1--ha01-vm--103--disk--0
-   → VM 103 does not exist on this node
-   → This will block VM 103 from creating disk-0 on storage t1-ha01!
-
-📊 ANALYSIS SUMMARY
-=========================================
-   Total device mapper entries: 62
-   Valid entries: 4 ✅ (v35 correctly identifies valid entries)
-   Duplicate entries: 0 ✅
-   Tombstoned entries: 58 ⚠️ WILL BLOCK DISK CREATION!
-   Total issues: 58
-```
-
-### Before v35 (Case Sensitivity Bug)
-```
-   Valid entries: 0 ❌ (v34 bug - all marked as tombstones!)
-   Tombstoned entries: 62 ❌ (false positives from case mismatch)
-```
-
----
-
-## 🔒 Safety Features
-
-### What Gets Cleaned
-- ✅ **TRUE Duplicate DM entries** (same storage pool, keeps first, removes extras)
-- ✅ **TRUE Tombstoned entries** (orphaned with proper storage pool verification)
-
-### What's Protected
-- ✅ **Multi-storage configurations** - Different pools with same disk number are VALID
-- ✅ **Case differences** - T1-HA07 matches t1--ha07 correctly (v35)
-- ✅ **VM disk data** - Never touched
-- ✅ **VM configurations** - Read-only access
-- ✅ **Active VMs** - Never modified
-- ✅ **Storage backends** - Unaffected
-
-### Cleanup Priority
-1. **TRUE DUPLICATES FIRST** - Critical issues that break VMs
-2. **Tombstones second** - Important but less urgent
-
----
-
-## 📬 Email Configuration
-
-Configure Mailjet API credentials in the script:
-
+Email reporting configuration (edit script header):
 ```bash
 MAILJET_API_KEY="your-api-key"
 MAILJET_API_SECRET="your-api-secret"
-FROM_EMAIL="automation@yourdomain.com"
-FROM_NAME="ProxMox DM Issue Detector"
-TO_EMAIL="admin@yourdomain.com"
+FROM_EMAIL="noc@organization.com"
+FROM_NAME="Proxmox Health Monitor"
+TO_EMAIL="infrastructure-team@organization.com"
 ```
-
-### Email Report Features
-- **Subject indicates severity**: 
-  - 🚨 CRITICAL: TRUE duplicates found
-  - ⚠️ WARNING: Tombstones only
-  - ✅ EXCELLENT: No issues
-- **Storage pool shown** in all detections
-- **Color-coded health status**
-- **VM-specific issue breakdown**
-- **Clear action items**
-- **GitHub repository links** for documentation
 
 ---
 
-## 🧪 Testing the Script
+## Usage and Operations
 
-### Create Test TRUE Duplicate (Use Carefully!)
+### Execution Modes
+
+#### 1. Analysis Mode (Default)
 ```bash
-# Create TRUE duplicate entries (same storage) for testing
-dmsetup create ssd--ha01-vm--999--disk--0 --table '0 204800 linear /dev/sda 0'
-dmsetup create ssd--ha01-vm--999--disk--0-dup --table '0 204800 linear /dev/sda 0'
+./Proxmox_DM_Cleanup_v35.sh
 ```
+Performs read-only analysis and generates reports without making changes.
 
-### Create Test Multi-Storage (NOT duplicates)
+#### 2. Interactive Cleanup Mode
+When issues are detected, the script offers interactive remediation:
+- Prioritizes critical issues (duplicates) over warnings (orphans)
+- Requires explicit confirmation for each action
+- Provides detailed explanation before each operation
+
+### Automated Monitoring
+
+Configure scheduled execution via cron:
 ```bash
-# Create entries on different storage pools (should NOT be flagged)
-dmsetup create ssd--ha01-vm--998--disk--0 --table '0 204800 linear /dev/sda 0'
-dmsetup create ssd--ha07-vm--998--disk--0 --table '0 204800 linear /dev/sdb 0'
+# Daily execution at 22:00
+0 22 * * * /root/Proxmox_DM_Cleanup_v35.sh > /var/log/proxmox_dm_check.log 2>&1
 ```
 
-### Create Test Tombstone
+### Output Interpretation
+
+#### Health Grades
+- **A+**: No issues detected
+- **B**: 1-5 orphaned entries
+- **C**: 6-20 orphaned entries  
+- **D**: 21-50 orphaned entries
+- **F**: Any duplicate entries OR 50+ orphaned entries
+
+#### VM Status Matrix
+```
+VM ID    NAME                           STATUS       DM HEALTH
+-----    ----                           ------       ---------
+169      Production Database            Running      Clean
+170      Web Server                     Running      [!] 1 storage:disk(s) DUPLICATED
+171      Backup Server                  Stopped      [!] 2 tombstone(s)
+```
+
+---
+
+## Technical Implementation
+
+### Issue Detection Algorithms
+
+#### Duplicate Detection
+Identifies multiple device mapper entries for the same combination of:
+- VM ID
+- Storage Pool  
+- Disk Number
+
+Only entries matching all three criteria are classified as duplicates.
+
+#### Orphan Detection
+Classifies entries as orphaned when:
+- Associated VM does not exist on the node
+- VM exists but lacks the specific disk configuration
+- Storage pool reference does not match VM configuration
+
+### Safety Mechanisms
+
+1. **Read-Only Default**: No modifications without explicit user consent
+2. **Open Handle Detection**: Verifies device "Open count" is 0 before removal (via `dmsetup info`)
+3. **Dependency Ordering**: Removes child devices (e.g., vm-disk-0p1) before parent devices (vm-disk-0)
+4. **Case-Insensitive Matching**: Handles storage pool naming variations (T1-HA07 vs t1--ha07)
+5. **Storage Pool Verification**: Only identifies true duplicates on the same storage pool
+6. **Confirmation Required**: Each removal action requires explicit user confirmation
+
+### Known Limitations and Bugs
+
+- **Automatic Cleanup Failures**: Device mapper entries frequently fail to be removed when VMs are deleted
+- **Proxmox 8.2.2 Regression**: Creates device mapper entries for ALL LVM volumes at boot, not just active VMs
+- **Cluster Synchronization**: Shared storage environments may have orphaned entries on multiple nodes
+- **Race Conditions**: VM ID assignment lacks atomic reservation, causing conflicts during simultaneous VM creation
+- **Partition Dependencies**: Child devices (e.g., vm-disk-0p1) can keep parent devices from being removed
+- **LVM Autoactivation**: In clustered environments, causes entries to be recreated after cleanup
+
+---
+
+## Version History
+
+### Version 35 (Current)
+- Implemented case-insensitive storage pool comparison
+- Resolved false positive detections with uppercase storage names
+- Enhanced compatibility with mixed-case storage configurations
+
+### Version 34
+- Added storage pool verification to orphan detection
+- Implemented support for NVMe and multipath disk types
+- Enhanced email report JSON encoding
+
+### Version 33
+- Corrected storage pool extraction methodology
+- Improved duplicate detection accuracy
+
+### Version 32
+- Resolved false positive duplicate detection
+- Implemented storage-aware duplicate identification
+
+### Previous Versions
+See GitHub repository for complete version history.
+
+---
+
+## Best Practices
+
+### Pre-Deployment
+1. Verify current backup status
+2. Document existing VM configurations
+3. Test in isolated environment
+4. Review script output in analysis mode
+
+### Operational Guidelines
+1. Run analysis before cleanup
+2. Address duplicate entries immediately (critical priority)
+3. Schedule regular orphan cleanup during maintenance windows
+4. Monitor trends over time
+5. Clean orphaned entries immediately after VM deletions
+
+### Preventive Configuration
+
+**LVM Filter Configuration** (prevents VM disks from being scanned):
 ```bash
-# Create orphaned entry
-dmsetup create test--ha01-vm--888--disk--0 --table '0 204800 linear /dev/sda 0'
+# Edit /etc/lvm/lvm.conf
+global_filter = ["r|/dev/zd.*|", "r|/dev/mapper/.*-vm--[0-9]+--disk--[0-9]+|"]
 ```
 
-### Cleanup Test Entries
+**Disable Autoactivation** (for clustered shared storage):
 ```bash
-dmsetup remove ssd--ha01-vm--999--disk--0
-dmsetup remove ssd--ha01-vm--999--disk--0-dup
-dmsetup remove ssd--ha01-vm--998--disk--0
-dmsetup remove ssd--ha07-vm--998--disk--0
-dmsetup remove test--ha01-vm--888--disk--0
+vgchange <VG_NAME> --setautoactivation n
+```
+
+### Post-Cleanup Verification
+1. Verify VM functionality
+2. Check storage accessibility  
+3. Confirm issue resolution via re-running analysis
+4. Document actions taken
+
+---
+
+## Troubleshooting
+
+### Common Issues
+
+#### VM Creation Fails - "Device Busy"
+- **Cause**: Orphaned entries blocking VM ID reuse
+- **Resolution**: Execute cleanup for specific VM ID
+
+#### Unpredictable VM Behavior
+- **Cause**: Duplicate device mapper entries
+- **Resolution**: Immediate cleanup required
+
+#### High Orphan Count
+- **Cause**: Improper VM deletion procedures
+- **Resolution**: Review VM lifecycle management processes
+
+### Diagnostic Commands
+
+```bash
+# List all device mapper entries
+dmsetup ls | grep vm--
+
+# Check specific VM entries
+dmsetup ls | grep vm--119
+
+# Find conflicting entries for a VMID
+dmsetup table | grep <VMID>
+
+# Verify entry details (check Open count)
+dmsetup info <device-name>
+
+# View device relationships
+dmsetup ls --tree
 ```
 
 ---
 
-## 🆕 Version History
+## Security Considerations
 
-### Version 35 (Current) - Case Insensitive Fix
-- 🔧 **CRITICAL FIX**: Storage pools now compared case-insensitively
-- 🚨 **FIXED**: False positive tombstones when storage uses uppercase (T1-HA07 vs t1--ha07)
-- 📊 **IMPACT**: Anyone using uppercase storage pool names now gets accurate results
-- ✅ **RESULT**: Zero false positives - all valid entries correctly identified
-
-### Version 34 - Storage Pool Verification
-- 🔧 **CRITICAL FIX**: Tombstone detection now includes storage pool verification
-- 🚨 **FIXED**: False positive tombstones for multi-storage configurations
-- 🆕 **NEW**: Added support for nvme and mpath disk prefixes
-- 📊 **IMPROVED**: Better storage pool name extraction preserving legitimate "--"
-- 🔒 **ENHANCED**: Python-based JSON escaping for more reliable emails
-
-### Version 33 - Storage Pool Fix
-- 🔧 **FIXED**: Storage pool extraction regex now works correctly
-- 🎯 **FIXED**: Empty storage names in duplicate detection output
-- 📊 **IMPROVED**: Shows storage pool name in duplicate detection
-
-### Version 32 - Major Bug Fix
-- 🚨 **FIXED**: False positive duplicates for different storage pools
-- ✅ **NEW**: Duplicate detection includes storage pool (VM:STORAGE:DISK)
-- 🎯 **IMPROVED**: Correctly handles VMs with disks on multiple storage pools
-
-### Version 31 - GitHub Integration
-- 🔗 **GitHub Integration** - Added repository links to email reports
-- 📄 **Easy Access** - Direct links to documentation from email footer
-- 🐛 **Bug Tracking** - Users can report issues directly from email
-
-### Version 30 - Major Refactor
-- 🎯 **Focus on DUPLICATES** as the critical issue
-- 📊 **VM Status Dashboard** showing health per VM
-- 🔢 **Accurate counting** - no more double-counting
-- 🏷️ **Simplified terminology** - Valid, Duplicate, or Tombstoned only
-- 🎨 **Visual health indicators** (🚨, ⚠️, ✅)
-- 📧 **Enhanced email subjects** clearly indicate severity
+- Script requires root privileges
+- Email reports may contain infrastructure details
+- No VM data is accessed or modified
+- Only device mapper metadata is affected
 
 ---
 
-## 🛠 Dependencies
-
-- Proxmox tools: `qm`, `pct`, `dmsetup`
-- Linux tools: `awk`, `sed`, `grep`, `sort`, `uniq`, `tr`
-- Email: `curl`, Mailjet API
-- Optional: `python3` (for enhanced email escaping), `top`, `free`, `df`, `uptime`
-
----
-
-## 🚨 Common Issues & Solutions
-
-### VM Won't Start - "Device Busy"
-**Cause**: TRUE duplicate or tombstoned entries  
-**Fix**: Run script, clean issues for that VM
-
-### Can't Create VM with Specific ID
-**Cause**: Tombstoned entries from old VM  
-**Fix**: Run script, remove tombstones
-
-### VM Behaving Unpredictably
-**Cause**: TRUE DUPLICATE entries (critical!)  
-**Fix**: Run script IMMEDIATELY
-
-### After Failed Migration
-**Symptom**: Leftover entries on source  
-**Fix**: Run script on source node
-
-### False Positive Duplicates (FIXED in v32/v33)
-**Old Bug**: v31 flagged different storage pools as duplicates  
-**v35 Behavior**: Correctly identifies only TRUE duplicates
-
-### False Positive Tombstones - Multi-Pool (FIXED in v34)
-**Old Bug**: v33 flagged multi-storage configs as tombstones  
-**v35 Behavior**: Properly verifies storage pool in tombstone detection
-
-### False Positive Tombstones - Case Sensitivity (FIXED in v35)
-**Old Bug**: v34 flagged uppercase storage pools as tombstones  
-**Example**: T1-HA07 (config) vs t1--ha07 (DM) = false tombstone  
-**v35 Behavior**: Case-insensitive comparison eliminates false positives
-
----
-
-## 👨‍💻 Author
+## Author Information
 
 **Keith R. Lucier**  
-✉️ keithrlucier@gmail.com  
-🔗 [LinkedIn Profile](https://www.linkedin.com/in/keithrlucier/)  
-
-Created this tool to solve critical Proxmox device mapper issues that were causing VM failures in production environments. The script represents extensive real-world testing and refinement to ensure accurate detection without false positives.
-
-**Remember**: This tool is provided AS-IS with no warranty or support. Use at your own risk.
+ProSource Technology Solutions  
+Email: keithrlucier@gmail.com  
+LinkedIn: [https://www.linkedin.com/in/keithrlucier/](https://www.linkedin.com/in/keithrlucier/)
 
 ---
 
-## 💬 Community Resources
+## Resources
 
-- **GitHub Repository**: [Source code and documentation](https://github.com/keithrlucier/proxmox-dm-health-check)
-- **Issue Tracker**: [Report bugs or share experiences](https://github.com/keithrlucier/proxmox-dm-health-check/issues)
-- **Documentation**: [Full documentation](https://github.com/keithrlucier/proxmox-dm-health-check/blob/main/Documentation.md)
-
-**Note**: No support is offered. Issues may be reviewed but responses are not guaranteed.
+- **Source Code**: [https://github.com/keithrlucier/proxmox-dm-health-check](https://github.com/keithrlucier/proxmox-dm-health-check)
+- **Documentation**: [https://github.com/keithrlucier/proxmox-dm-health-check/blob/main/Documentation.md](https://github.com/keithrlucier/proxmox-dm-health-check/blob/main/Documentation.md)
+- **Issue Tracking**: [https://github.com/keithrlucier/proxmox-dm-health-check/issues](https://github.com/keithrlucier/proxmox-dm-health-check/issues)
 
 ---
 
-## ⚠️ Final Warning
+## License
 
-**USE AT YOUR OWN RISK**. This script modifies critical system components. While it includes safety features and requires confirmation for changes, you are solely responsible for:
-
-- Understanding your environment
-- Having proper backups
-- Testing in non-production first
-- Any outcomes from using this tool
-
-The author assumes no liability for any issues, data loss, or system problems that may result from using this script.
+This project is licensed under the MIT License. See the [LICENSE](https://github.com/keithrlucier/proxmox-dm-health-check/blob/main/LICENSE) file for details.
 
 ---
 
-## 📄 License
-
-MIT License - See the [LICENSE](https://github.com/keithrlucier/proxmox-dm-health-check/blob/main/LICENSE) file for details.
-
----
-
-**Keywords**: Proxmox duplicate device mapper, VM startup failures, device busy errors, tombstoned entries, VM disk conflicts, Proxmox storage cleanup, device mapper troubleshooting, VM health monitoring, multi-storage VM support, false positive duplicates fixed, false positive tombstones fixed, nvme mpath support, case insensitive storage pools
-
----
-
-## 🔗 Quick Links
-
-- [GitHub Repository](https://github.com/keithrlucier/proxmox-dm-health-check)
-- [Full Documentation](https://github.com/keithrlucier/proxmox-dm-health-check/blob/main/Documentation.md)
-- [Issue Tracker](https://github.com/keithrlucier/proxmox-dm-health-check/issues)
-- [Latest Release](https://github.com/keithrlucier/proxmox-dm-health-check/releases)
-
----
-
-**Remember**: v35 provides accurate detection with ZERO false positives - handling case differences, multi-storage configurations, and modern disk types correctly! 🚨
+**Document Classification**: Public  
+**Last Updated**: January 2025  
+**Version**: 35
