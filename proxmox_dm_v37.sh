@@ -1,16 +1,14 @@
 #!/bin/bash
-# VERSION 36 - Proxmox Device Mapper Issue Detector
+# VERSION 37 - Proxmox Device Mapper Issue Detector
+# CRITICAL FIX v37: Fixed VM status parsing - was reading wrong field from qm list
+# CRITICAL FIX v37: Fixed false tombstone detection for local storage configurations
+# CRITICAL FIX v37: Added support for local/non-clustered storage patterns
 # NEW IN v36: Added device open safety check before removal attempts
 # CRITICAL FIX v35: Fixed case sensitivity bug - storage pools now compared case-insensitively
-# CRITICAL FIX v34: Fixed tombstone detection to include storage pool comparison
-# CRITICAL FIX v34: Added nvme and mpath disk prefix support
-# CRITICAL FIX v34: Fixed storage pool name extraction to preserve legitimate "--"
-# CRITICAL FIX v33: Fixed storage pool extraction regex
-# CRITICAL FIX v32: Duplicate detection now includes storage pool to prevent false positives
 # Detects DUPLICATE and TOMBSTONED device mapper entries
 # Shows VM status with health indicators
 # Identifies critical issues that cause VM failures
-# Includes HTML email reporting via Mailjet API with GitHub links
+# Includes HTML email reporting via Mailjet API
 
 # Mailjet Configuration
 MAILJET_API_KEY="ENTER API KEY HERE"
@@ -19,7 +17,7 @@ FROM_EMAIL="FROM EMAIL"
 FROM_NAME="ProxMox DM Issue Detector"
 TO_EMAIL="TO EMAIL"
 
-echo "Proxmox Device Mapper Issue Detector v36"
+echo "Proxmox Device Mapper Issue Detector v37"
 echo "Node: $(hostname)"
 echo "Date: $(date)"
 echo "Mode: DUPLICATE & TOMBSTONE DETECTION + OPTIONAL CLEANUP + EMAIL REPORTING"
@@ -27,7 +25,7 @@ echo ""
 echo "IMPORTANT: This tool identifies critical device mapper issues:"
 echo "           • DUPLICATES - Multiple DM entries for same disk (causes VM failures)"
 echo "           • TOMBSTONES - Orphaned DM entries (blocks disk creation)"
-echo "           • NEW: Device open safety check before removal"
+echo "           • Device open safety check before removal"
 echo ""
 
 # Initialize count variables
@@ -40,7 +38,7 @@ TOTAL_VMS=0
 RUNNING_VMS_COUNT=0
 DEVICES_IN_USE_COUNT=0
 
-# NEW v36: Function to check if a device mapper device is currently open/in use
+# Function to check if a device mapper device is currently open/in use
 check_device_open() {
     local dm_name="$1"
     
@@ -86,8 +84,8 @@ else
     echo "   Found $TOTAL_VMS VMs total"
 fi
 
-# Count running VMs for statistics
-RUNNING_VMS=$(grep running "$VM_LIST_FILE" | awk '{print $1}')
+# Count running VMs for statistics - FIX v37: Check column 2 for status
+RUNNING_VMS=$(awk '$2 == "running" {print $1}' "$VM_LIST_FILE")
 if [ -n "$RUNNING_VMS" ]; then
     RUNNING_VMS_COUNT=$(echo "$RUNNING_VMS" | wc -w)
 else
@@ -118,30 +116,38 @@ TOTAL_DM_ENTRIES=$(wc -l < "$DM_TEMP_FILE")
 echo "Found $TOTAL_DM_ENTRIES device mapper entries to analyze"
 echo ""
 
-# Function to parse VM disk configuration
+# Function to parse VM disk configuration - ENHANCED v37
 parse_vm_config() {
     local vm_id="$1"
     local config_file="/etc/pve/qemu-server/${vm_id}.conf"
     
     if [ ! -f "$config_file" ]; then
-        return 1
+        # Try local config path for non-clustered setups
+        config_file="/etc/pve/local/qemu-server/${vm_id}.conf"
+        if [ ! -f "$config_file" ]; then
+            return 1
+        fi
     fi
     
-    # CRITICAL FIX v34: Added nvme and mpath disk prefixes
     # Extract ALL disk configurations including special disk types
     grep -E "^(virtio|ide|scsi|sata|efidisk|tpmstate|nvme|mpath|unused)[0-9]+:" "$config_file" | while IFS= read -r line; do
         # Extract storage and disk info
         disk_def=$(echo "$line" | cut -d: -f2- | cut -d, -f1 | xargs)
         
-        # Handle different disk patterns
-        if echo "$disk_def" | grep -E "^[^:]+:vm-[0-9]+-(disk|tmp-state)-[0-9]+$" >/dev/null; then
-            # CRITICAL FIX v35: Convert storage pool to lowercase for case-insensitive comparison
-            # Device mapper always uses lowercase, but storage.cfg may use uppercase
+        # Handle different disk patterns - ENHANCED v37 for local storage
+        # Pattern 1: storage:vm-id-disk-num (standard)
+        # Pattern 2: local-lvm:vm-id-disk-num (local storage)
+        # Pattern 3: local:vm-id-disk-num (local directory storage)
+        if echo "$disk_def" | grep -E "^[^:]+:.*vm-[0-9]+-(disk|cloudinit|tmp-state)-[0-9]+.*$" >/dev/null; then
+            # Convert storage pool to lowercase for case-insensitive comparison
             storage_pool=$(echo "$disk_def" | cut -d: -f1 | tr '[:upper:]' '[:lower:]')
-            disk_name=$(echo "$disk_def" | cut -d: -f2)
+            # Get the part after the colon
+            disk_part=$(echo "$disk_def" | cut -d: -f2)
+            # Extract just the vm-id-disk-num part, ignoring any size or format info
+            disk_name=$(echo "$disk_part" | sed 's/,.*$//' | sed 's/\..*$//')
             
-            # Extract disk number
-            disk_num=$(echo "$disk_name" | sed -n 's/.*-\(disk\|tmp-state\)-\([0-9]\+\)$/\2/p')
+            # Extract disk number from patterns like vm-102-disk-0
+            disk_num=$(echo "$disk_name" | sed -n 's/.*-\(disk\|cloudinit\|tmp-state\)-\([0-9]\+\)$/\2/p')
             
             if [ -n "$disk_num" ]; then
                 echo "CONFIG:${vm_id}:${storage_pool}:${disk_num}"
@@ -150,27 +156,29 @@ parse_vm_config() {
     done
 }
 
-# Function to parse device mapper entries
+# Function to parse device mapper entries - ENHANCED v37
 parse_dm_entries() {
     while IFS= read -r dm_line; do
         DM_NAME=$(echo "$dm_line" | awk '{print $1}')
         VM_ID=$(echo "$DM_NAME" | sed -n 's/.*vm--\([0-9]\+\)--.*/\1/p')
         
         if [ -n "$VM_ID" ]; then
-            # CRITICAL FIX v34: Fixed storage pool extraction to preserve legitimate "--"
-            # Extract storage pool by getting everything before '-vm--'
-            # First, find the position of '-vm--' pattern
+            # Extract storage pool by getting everything before 'vm--'
             STORAGE_PART=$(echo "$DM_NAME" | sed 's/-vm--.*//')
             
-            # Only convert double dashes that were created by dmsetup, not legitimate ones
-            # DM converts single '-' to '--', so we need to reverse this carefully
-            # But we must preserve any legitimate '--' that were in the original storage name
-            # This is complex, so for now we'll use a more precise approach:
-            # Split on 'vm--' first, then handle the storage part
+            # Convert double dashes back to single (DM converts - to --)
+            # But preserve legitimate -- in storage names
             STORAGE_PART=$(echo "$STORAGE_PART" | sed 's/--/-/g')
             
             # Extract disk number
             DISK_NUM=$(echo "$DM_NAME" | sed -n 's/.*--disk--\([0-9]\+\).*/\1/p')
+            
+            # For local storage, dmsetup might show different patterns
+            # Handle both "local-lvm" and "local" storage types
+            if [ -z "$DISK_NUM" ]; then
+                # Try alternative pattern for local storage
+                DISK_NUM=$(echo "$DM_NAME" | sed -n 's/.*--\([0-9]\+\)$/\1/p')
+            fi
             
             echo "DM:${VM_ID}:${STORAGE_PART}:${DISK_NUM}:${DM_NAME}"
         fi
@@ -192,6 +200,12 @@ done
 CONFIG_COUNT=$(wc -l < "$CONFIG_TEMP_FILE" 2>/dev/null || echo 0)
 echo "   Found $CONFIG_COUNT disk configurations across $TOTAL_VMS VMs"
 
+# Debug output for troubleshooting - remove in production
+if [ "$CONFIG_COUNT" -eq 0 ] && [ "$TOTAL_VMS" -gt 0 ]; then
+    echo "   ⚠️  Warning: No disk configurations found despite having VMs"
+    echo "   This might indicate a configuration parsing issue"
+fi
+
 # Parse all DM entries
 echo ""
 echo "Step 2: Analyzing device mapper entries..."
@@ -199,7 +213,7 @@ DM_PARSED_FILE=$(mktemp)
 DUPLICATE_FILE=$(mktemp)
 parse_dm_entries > "$DM_PARSED_FILE"
 
-# NEW v36: Check for devices currently in use
+# Check for devices currently in use
 echo ""
 echo "Step 3: Checking device open status..."
 while IFS= read -r dm_line; do
@@ -218,7 +232,7 @@ echo ""
 echo "Step 4: Detecting DUPLICATE entries (critical issue!)..."
 echo ""
 
-# CRITICAL FIX: Include storage pool in duplicate detection (VM:STORAGE:DISK)
+# Include storage pool in duplicate detection (VM:STORAGE:DISK)
 awk -F: '{print $2":"$3":"$4}' "$DM_PARSED_FILE" | sort | uniq -c | while read count vm_storage_disk; do
     if [ "$count" -gt 1 ]; then
         vm_id=$(echo "$vm_storage_disk" | cut -d: -f1)
@@ -231,7 +245,7 @@ awk -F: '{print $2":"$3":"$4}' "$DM_PARSED_FILE" | sort | uniq -c | while read c
         # Find all DM entries for this duplicate (matching VM, storage, and disk)
         grep "^DM:${vm_id}:${storage}:${disk_num}:" "$DM_PARSED_FILE" | while IFS= read -r dup_line; do
             dm_name=$(echo "$dup_line" | cut -d: -f5)
-            # NEW v36: Check if device is in use
+            # Check if device is in use
             if grep -q "^${dup_line}$" "$DEVICES_IN_USE_FILE"; then
                 echo "      - $dm_name [IN USE]"
             else
@@ -281,15 +295,21 @@ while IFS= read -r dm_line; do
             IS_TOMBSTONED=true
             TOMBSTONE_REASON="VM $VM_ID does not exist on this node"
         else
-            # CRITICAL FIX v34: Check if this specific VM+storage+disk combination exists in config
             # VM exists, check if this disk is in its config
             DISK_IN_CONFIG=false
-            while IFS= read -r config_line; do
-                if [[ "$config_line" == "CONFIG:${VM_ID}:${STORAGE}:${DISK_NUM}" ]]; then
-                    DISK_IN_CONFIG=true
-                    break
+            
+            # ENHANCED v37: More flexible matching for local storage
+            # Check for exact match first
+            if grep -q "^CONFIG:${VM_ID}:${STORAGE}:${DISK_NUM}$" "$CONFIG_TEMP_FILE"; then
+                DISK_IN_CONFIG=true
+            else
+                # Check for local storage variations (local, local-lvm, etc)
+                if echo "$STORAGE" | grep -q "^local"; then
+                    if grep -E "^CONFIG:${VM_ID}:local[^:]*:${DISK_NUM}$" "$CONFIG_TEMP_FILE" | grep -q .; then
+                        DISK_IN_CONFIG=true
+                    fi
                 fi
-            done < "$CONFIG_TEMP_FILE"
+            fi
             
             if [ "$DISK_IN_CONFIG" = "false" ]; then
                 IS_TOMBSTONED=true
@@ -298,7 +318,7 @@ while IFS= read -r dm_line; do
         fi
         
         if [ "$IS_TOMBSTONED" = "true" ]; then
-            # NEW v36: Note if device is in use
+            # Note if device is in use
             IN_USE_MSG=""
             if grep -q "^${dm_line}$" "$DEVICES_IN_USE_FILE"; then
                 IN_USE_MSG=" [DEVICE IN USE]"
@@ -392,10 +412,12 @@ if [ "$TOTAL_VMS" -gt 0 ]; then
     printf "%-8s %-40s %-12s %s\n" "-----" "----" "------" "---------"
     
     while IFS= read -r vm_line; do
+        # FIX v37: Correct field extraction from qm list output
+        # Format is: VMID STATUS NAME ...
         vm_id=$(echo "$vm_line" | awk '{print $1}')
-        # FIX: Extract VM name properly - get text between status and first numeric field
-        vm_name=$(echo "$vm_line" | sed -E 's/^[0-9]+[[:space:]]+[a-z]+[[:space:]]+([^[:space:]]+([[:space:]]+[^[:space:]0-9]+)*).*/\1/' | xargs)
         vm_status=$(echo "$vm_line" | awk '{print $2}')
+        # Get everything from field 3 onward as the name
+        vm_name=$(echo "$vm_line" | awk '{for(i=3;i<=NF;i++) printf "%s ", $i; print ""}' | xargs)
         
         # Check health status
         health_status="✅ Clean"
@@ -840,7 +862,7 @@ generate_html_email() {
     <div class='container'>
         <div style='font-size: 0.9em; color: #6c757d; margin-bottom: 20px; border-bottom: 1px solid #dee2e6; padding-bottom: 10px;'>
 EOF
-    echo "            <p>Proxmox Device Mapper Issue Detection Report v36 - $(date '+%Y-%m-%d %H:%M:%S')</p>"
+    echo "            <p>Proxmox Device Mapper Issue Detection Report v37 - $(date '+%Y-%m-%d %H:%M:%S')</p>"
     echo "        </div>"
     echo "        "
     echo "        <div class='title-header' style='background-color: $([ "$TOMBSTONED_COUNT" -gt 20 ] && echo "#dc3545" || [ "$TOMBSTONED_COUNT" -gt 0 ] && echo "#ffc107" || echo "#28a745");'>"
@@ -863,7 +885,7 @@ EOF
             echo "            <strong>⚠️ WARNING:</strong> $TOMBSTONED_COUNT tombstoned entries detected"
             echo "            <p style='margin: 10px 0 0 0;'>These orphaned entries will cause 'Device busy' errors when creating VM disks.</p>"
         fi
-        echo "            <p style='font-size: 0.9em; margin: 10px 0;'>Run cleanup: <span class='code-inline'>./Proxmox_DM_Cleanup_v36.sh</span></p>"
+        echo "            <p style='font-size: 0.9em; margin: 10px 0;'>Run cleanup: <span class='code-inline'>./Proxmox_DM_Cleanup_v37.sh</span></p>"
         echo "        </div>"
     else
         echo "        <div class='success'>"
@@ -878,7 +900,7 @@ EOF
     echo "                <strong>Critical Issues Detected:</strong><br>"
     echo "                • <strong>Duplicate entries:</strong> Multiple DM entries for the same VM disk - causes unpredictable behavior<br>"
     echo "                • <strong>Tombstoned entries:</strong> Orphaned DM entries for deleted VMs/disks - blocks disk creation<br>"
-    echo "                • <strong>NEW - Device open check:</strong> Safety check prevents removal of devices currently in use"
+    echo "                • <strong>Device open check:</strong> Safety check prevents removal of devices currently in use"
     echo "            </div>"
     echo "            <div class='metric-grid'>"
     echo "                <div class='metric-item'>"
@@ -954,10 +976,10 @@ EOF
         
         # Display each VM
         while IFS= read -r vm_line; do
+            # FIX v37: Correct field extraction
             vm_id=$(echo "$vm_line" | awk '{print $1}')
-            # FIX: Extract VM name properly - get text between status and first numeric field
-            vm_name=$(echo "$vm_line" | sed -E 's/^[0-9]+[[:space:]]+[a-z]+[[:space:]]+([^[:space:]]+([[:space:]]+[^[:space:]0-9]+)*).*/\1/' | xargs)
             vm_status=$(echo "$vm_line" | awk '{print $2}')
+            vm_name=$(echo "$vm_line" | awk '{for(i=3;i<=NF;i++) printf "%s ", $i; print ""}' | xargs)
             
             # Check health - duplicates are most critical
             health_html=""
@@ -1046,7 +1068,7 @@ EOF
         fi
         
         echo "                <p style='margin-top: 15px;'><strong>Fix now:</strong> SSH to $(hostname) and run:</p>"
-                        echo "                <p style='margin: 5px 0; padding: 10px; background-color: #f8f9fa; border-radius: 4px; font-family: monospace;'>./Proxmox_DM_Cleanup_v36.sh</p>"
+        echo "                <p style='margin: 5px 0; padding: 10px; background-color: #f8f9fa; border-radius: 4px; font-family: monospace;'>./Proxmox_DM_Cleanup_v37.sh</p>"
         echo "            </div>"
         echo "        </div>"
     else
@@ -1058,9 +1080,10 @@ EOF
     fi
     
     echo "        <div class='footer'>"
-    echo "            <p><strong>ProxMox DM Issue Detector v36</strong></p>"
-        echo "            <p>Node: <strong>$(hostname)</strong> • Generated: $(date)</p>"
-            echo "        </div>"
+    echo "            <p><strong>ProxMox DM Issue Detector v37</strong></p>"
+    echo "            <p>Fixed: VM status parsing & local storage support</p>"
+    echo "            <p>Node: <strong>$(hostname)</strong> • Generated: $(date)</p>"
+    echo "        </div>"
     echo "    </div>"
     echo "</body>"
     echo "</html>"
@@ -1071,7 +1094,7 @@ send_mailjet_email() {
     html_content="$1"
     subject="$2"
     
-    # CRITICAL FIX v34: Improved HTML escaping for JSON using python
+    # Improved HTML escaping for JSON using python
     if command -v python3 >/dev/null 2>&1; then
         # Use python for proper JSON escaping
         json_payload=$(python3 -c "
@@ -1211,7 +1234,7 @@ if [ "$TOTAL_ISSUES" -gt 0 ]; then
                     else
                         CURRENT_ENTRY=$((CURRENT_ENTRY + 1))
                         
-                        # NEW v36: Check if device is open before attempting removal
+                        # Check if device is open before attempting removal
                         if check_device_open "$dm_name"; then
                             echo "  ⚠️  DUPLICATE: $dm_name [DEVICE IS CURRENTLY OPEN/IN USE]"
                             echo "     → Cannot remove while device is in use. Stop the VM first."
@@ -1237,6 +1260,20 @@ if [ "$TOTAL_ISSUES" -gt 0 ]; then
                             case $entry_choice in
                                 [Yy]* | "") 
                                     echo "     Executing: dmsetup remove $dm_name"
+                                    if dmsetup remove "$dm_name" 2>/dev/null; then
+                                        echo "     ✓ SUCCESS: Removed duplicate"
+                                        CLEANED_COUNT=$((CLEANED_COUNT + 1))
+                                    else
+                                        echo "     ✗ FAILED: Could not remove"
+                                    fi
+                                    ;;
+                                [Nn]* ) 
+                                    echo "     ⚠️  WARNING: Keeping duplicate - VM FAILURES LIKELY!"
+                                    SKIPPED_COUNT=$((SKIPPED_COUNT + 1))
+                                    ;;
+                                [Aa]* )
+                                    echo "     REMOVE ALL: Will remove all remaining duplicates"
+                                    REMOVE_ALL=true
                                     if dmsetup remove "$dm_name" 2>/dev/null; then
                                         echo "     ✓ SUCCESS: Removed duplicate"
                                         CLEANED_COUNT=$((CLEANED_COUNT + 1))
@@ -1279,7 +1316,7 @@ if [ "$TOTAL_ISSUES" -gt 0 ]; then
                 
                 CURRENT_TOMBSTONE=$((CURRENT_TOMBSTONE + 1))
                 
-                # NEW v36: Check if device is open before attempting removal
+                # Check if device is open before attempting removal
                 if check_device_open "$DM_NAME"; then
                     echo "----------------------------------------"
                     echo "TOMBSTONE $CURRENT_TOMBSTONE of $TOMBSTONED_COUNT:"

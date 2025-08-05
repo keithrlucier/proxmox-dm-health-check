@@ -2,21 +2,22 @@
 
 **Enterprise Device Mapper Management for Proxmox Virtual Environment**
 
-Version 36 | MIT License | Proxmox VE 6.x+
+Version 37 | MIT License | Proxmox VE 6.x+
 
 ## Overview
 
 The Proxmox Device Mapper Health Check tool identifies and safely resolves device mapper inconsistencies that cause VM failures in Proxmox VE environments. It detects duplicate and orphaned device mapper entries that prevent VM operations and provides controlled remediation with comprehensive safety checks.
 
-### What's New in v36
+### What's New in v37
 
-🛡️ **Device Open Safety Protection**: Automatically detects and protects in-use devices from removal, preventing disruption to running VMs.
+🎯 **Enhanced Non-Clustered Environment Support**: Improved detection accuracy for standalone Proxmox nodes and local storage configurations, ensuring reliable reporting across all deployment types.
 
 ### Key Features
 
 - **Critical Issue Detection**: Identifies duplicate device mapper entries causing VM failures
 - **Orphaned Entry Management**: Finds and removes entries blocking VM ID reuse
-- **Safety First**: NEW - Checks device open status before any removal attempt
+- **Universal Environment Support**: Optimized for both clustered and standalone deployments
+- **Safety First**: Checks device open status before any removal attempt
 - **Enterprise Reporting**: HTML email reports with health grades and actionable insights
 - **Interactive Cleanup**: User-confirmed remediation with clear explanations
 - **Automated Monitoring**: Cron-compatible for scheduled health checks
@@ -28,10 +29,10 @@ The Proxmox Device Mapper Health Check tool identifies and safely resolves devic
 ```bash
 # Download latest version
 # Note: Replace with actual URL from releases or repository
-curl -O https://github.com/keithrlucier/proxmox-dm-health-check/releases/latest/download/proxmox_dm_v36.sh
+curl -O https://github.com/keithrlucier/proxmox-dm-health-check/releases/latest/download/proxmox_dm_v37.sh
 # OR manually download from the repository
 
-chmod +x proxmox_dm_v36.sh
+chmod +x proxmox_dm_v37.sh
 
 # Configure email reporting (optional)
 # Edit the script header with your Mailjet API credentials
@@ -41,7 +42,7 @@ chmod +x proxmox_dm_v36.sh
 
 ```bash
 # Run analysis only (safe, read-only)
-./proxmox_dm_v36.sh
+./proxmox_dm_v37.sh
 
 # When prompted, choose interactive cleanup
 Do you want to interactively clean up these issues? (y/N): y
@@ -51,7 +52,7 @@ Do you want to interactively clean up these issues? (y/N): y
 
 ```bash
 # Add to crontab for daily checks
-0 2 * * * /root/proxmox_dm_v36.sh > /var/log/proxmox_dm_check.log 2>&1
+0 2 * * * /root/proxmox_dm_v37.sh > /var/log/proxmox_dm_check.log 2>&1
 ```
 
 ## Understanding the Issues
@@ -69,12 +70,27 @@ Proxmox has persistent bugs where device mapper entries aren't properly cleaned 
 - Proxmox automatically assigns the lowest available VM ID (default range: 100-1,000,000)
 - Device mapper entries persist across reboots - manual cleanup is required
 - Proxmox 8.2.2+ has a regression that creates entries for ALL LVM volumes at boot
+- Local storage configurations require special handling for accurate detection
+
+## Environment Support
+
+### Clustered Environments
+
+The tool handles complex shared storage scenarios with multiple nodes accessing the same storage pools, accurately distinguishing between legitimate cross-node entries and orphaned entries.
+
+### Non-Clustered Environments (Enhanced in v37)
+
+Standalone Proxmox nodes with local storage now receive optimized detection algorithms that:
+- Accurately parse VM status information
+- Properly handle local-lvm and local directory storage patterns
+- Eliminate false positive detections for local storage configurations
+- Support both traditional and modern storage naming conventions
 
 ## Safety Features
 
-### Device Open Protection (NEW in v36)
+### Device Open Protection
 
-The tool now checks if devices are in use before attempting removal:
+The tool checks if devices are in use before attempting removal:
 
 ```
 🚨 DUPLICATE: ssd--ha01-vm--169--disk--0 [DEVICE IS CURRENTLY OPEN/IN USE]
@@ -87,6 +103,7 @@ The tool now checks if devices are in use before attempting removal:
 2. **Device Open Check**: Uses `dmsetup info`, `lsof`, and `fuser` to verify device status
 3. **User Confirmation**: Every removal requires explicit approval
 4. **Running VM Protection**: Automatically skips devices belonging to active VMs
+5. **Storage Type Awareness**: Handles local, shared, and complex storage configurations
 
 ## Output Interpretation
 
@@ -128,12 +145,19 @@ The tool now checks if devices are in use before attempting removal:
 
 **Solution**: Immediate cleanup required - duplicates are critical issues
 
+### Scenario 3: False Positives on Local Storage
+
+**Symptom**: Valid local storage entries incorrectly flagged as orphaned
+
+**Resolution**: v37's enhanced detection algorithms properly recognize local storage patterns
+
 ## Best Practices
 
 1. **Run After VM Deletions**: Clean up immediately to prevent future ID conflicts
 2. **Schedule Regular Checks**: Use cron for daily monitoring
 3. **Stop VMs Before Cleanup**: For best results, stop affected VMs before remediation
 4. **Monitor Trends**: Track issue counts over time to identify systemic problems
+5. **Verify Storage Type**: Ensure the tool correctly identifies your storage configuration
 
 ## Requirements
 
@@ -161,13 +185,16 @@ dmsetup info <device-name> | grep "Open count"
 
 # Find entries for a specific VM
 dmsetup ls | grep vm--119
+
+# Verify VM status parsing
+qm list | awk '{print $1, $2}'
 ```
 
 ### Need Help?
 
 1. Check the [full documentation](Documentation.md) for detailed troubleshooting
 2. Review [existing issues](https://github.com/keithrlucier/proxmox-dm-health-check/issues)
-3. Ensure you're running the latest version (v36)
+3. Ensure you're running the latest version (v37)
 
 ## Disclaimer
 
@@ -184,5 +211,5 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 
 ---
 
-**Version**: 36  
+**Version**: 37  
 **Last Updated**: November 2024

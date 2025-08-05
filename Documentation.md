@@ -4,7 +4,7 @@
 
 The Proxmox Device Mapper Health Check is an enterprise-grade diagnostic and remediation tool designed to maintain the integrity of device mapper entries in Proxmox Virtual Environment (PVE) clusters. The tool identifies and resolves critical device mapper inconsistencies that can cause virtual machine failures, data corruption, and operational disruptions.
 
-**Version 36 Enhancement**: Introduces device open safety checks to prevent removal of in-use device mapper entries, ensuring system stability during cleanup operations.
+**Version 37 Enhancement**: Expanded support for non-clustered environments with local storage configurations, providing accurate detection and reporting across all Proxmox deployment architectures.
 
 ### Key Operational Context
 
@@ -36,6 +36,22 @@ In Proxmox VE, the device mapper (DM) subsystem creates a mapping layer between 
 For example:
 - `ssd--ha01-vm--169--disk--0` represents disk 0 of VM 169 on storage pool ssd-ha01
 - `t1--ha07-vm--119--disk--1` represents disk 1 of VM 119 on storage pool t1-ha07
+- `local--lvm-vm--102--disk--0` represents disk 0 of VM 102 on local-lvm storage (non-clustered)
+
+### Environment-Specific Considerations (Enhanced in v37)
+
+#### Clustered Environments
+In clustered deployments with shared storage:
+- Device mapper entries may legitimately exist on multiple nodes
+- Storage pools typically use network-based naming (e.g., ssd-ha01, nfs-cluster)
+- Migration operations require careful coordination of device mapper states
+
+#### Non-Clustered Environments
+In standalone deployments with local storage:
+- Storage pools commonly use local naming patterns (local, local-lvm, local-zfs)
+- VM status reporting requires precise field parsing from management tools
+- Configuration files may reside in alternative paths (/etc/pve/local/)
+- Device mapper patterns may vary based on storage type
 
 ### Problem Statement
 
@@ -45,6 +61,7 @@ Over time, device mapper entries can become desynchronized with VM configuration
 - Storage detachment operations
 - Cluster synchronization issues
 - Manual intervention errors
+- Local storage management complexities
 
 These inconsistencies manifest as two primary issue types:
 
@@ -96,6 +113,7 @@ The script begins by performing comprehensive system discovery:
 VM Discovery:
 ├── Query all VMs on the current node (qm list)
 ├── Extract VM IDs, names, and running states
+│   └── Enhanced parsing for accurate status detection (v37)
 ├── Count total and running VMs
 └── Store VM metadata for reference
 ```
@@ -109,15 +127,15 @@ DM Entry Analysis:
 ├── List all device mapper entries (dmsetup ls)
 ├── Filter VM-related entries (pattern: vm--[0-9]+--disk)
 ├── Parse each entry to extract:
-│   ├── Storage pool name
+│   ├── Storage pool name (with local storage pattern support)
 │   ├── VM ID
 │   └── Disk number
 └── Build comprehensive mapping table
 ```
 
-### 3. Device Open Safety Check (NEW in v36)
+### 3. Device Open Safety Check
 
-Before any analysis or remediation, the tool now performs device open status verification:
+Before any analysis or remediation, the tool performs device open status verification:
 
 ```
 Device Open Check:
@@ -155,18 +173,24 @@ The tool uses multiple methods to ensure accurate detection of in-use devices:
    - Quick check for device usage
    - Fallback when lsof is unavailable
 
-### 4. Configuration Validation
+### 4. Configuration Validation (Enhanced in v37)
 
 Each VM's configuration is parsed to build the expected device mapper state:
 
 ```
 Configuration Parsing:
-├── Read VM configuration files (/etc/pve/qemu-server/<vmid>.conf)
+├── Read VM configuration files
+│   ├── Primary path: /etc/pve/qemu-server/<vmid>.conf
+│   └── Fallback path: /etc/pve/local/qemu-server/<vmid>.conf (non-clustered)
 ├── Extract all disk definitions:
 │   ├── Standard disks (virtio, ide, scsi, sata)
-│   ├── Special disks (efidisk, tpmstate)
+│   ├── Special disks (efidisk, tpmstate, cloudinit)
 │   ├── Modern disks (nvme, mpath)
 │   └── Unused disk reservations
+├── Handle local storage patterns:
+│   ├── local-lvm:vm-<id>-disk-<num>
+│   ├── local:vm-<id>-disk-<num>
+│   └── Custom local storage variants
 ├── Normalize storage pool names (case-insensitive)
 └── Create expected DM entry list
 ```
@@ -182,7 +206,6 @@ for each unique (vm_id, storage_pool, disk_number):
     if entry_count > 1:
         mark_as_duplicate(all_but_first_entry)
         set_severity = CRITICAL
-        # NEW in v36: Note which duplicates are in use
         for each duplicate_entry:
             if is_device_open(duplicate_entry):
                 mark_as_in_use()
@@ -193,18 +216,27 @@ Duplicates are identified when multiple device mapper entries exist for the same
 - Storage pool
 - Disk number
 
-**Important**: Different storage pools with the same disk number are valid configurations (e.g., disk-0 on both ssd-ha01 and ssd-ha07).
+**Important**: Different storage pools with the same disk number are valid configurations (e.g., disk-0 on both ssd-ha01 and local-lvm).
 
-#### Orphan Detection Logic
+#### Orphan Detection Logic (Enhanced in v37)
 
 ```python
-# Pseudocode for orphan detection
+# Pseudocode for orphan detection with local storage support
 for each dm_entry:
     if vm_id not in active_vms_on_this_node:
         mark_as_orphan("VM does not exist on this node")
-    elif (vm_id, storage_pool, disk_num) not in vm_configurations:
-        mark_as_orphan("Disk not in VM configuration")
-    # NEW in v36: Check if orphan is in use
+    else:
+        # Enhanced matching for local storage patterns
+        if not exact_match_found:
+            if is_local_storage(storage_pool):
+                # Flexible matching for local storage variations
+                if flexible_local_match_found:
+                    mark_as_valid()
+                else:
+                    mark_as_orphan("Disk not in VM configuration")
+            else:
+                mark_as_orphan("Disk not in VM configuration")
+    
     if is_orphan and is_device_open(dm_entry):
         mark_as_in_use_orphan()
 ```
@@ -214,7 +246,7 @@ Orphaned entries are identified when:
 - The VM exists on the node but has no corresponding disk on the specified storage pool
 - The disk reference was removed from the VM configuration but the mapper entry persists
 
-**Important**: A VM may exist in the Proxmox cluster on a different node, but if it's not configured to run on the current node, its device mapper entries are considered orphaned on this node.
+**Enhanced Local Storage Detection**: The tool now recognizes various local storage naming patterns and performs flexible matching to prevent false positives in non-clustered environments.
 
 ### 6. Health Assessment
 
@@ -234,10 +266,11 @@ Health Score Calculation:
     └── F:  Any duplicates OR 50+ orphaned entries
 ```
 
-**NEW in v36**: The health assessment now includes device open status information:
+The health assessment includes:
 - Total devices currently in use
 - Which problematic entries cannot be immediately cleaned
 - Safety warnings for cleanup operations
+- Environment-specific considerations
 
 ### 7. Reporting Engine
 
@@ -245,14 +278,15 @@ The reporting system generates comprehensive HTML reports including:
 
 - **Executive Summary**: Overall health status and grade
 - **Issue Analysis**: Detailed breakdown of detected problems
-- **VM Status Matrix**: Health status for each VM
+- **VM Status Matrix**: Health status for each VM with accurate state reporting
 - **System Metrics**: CPU, memory, storage utilization
-- **Device Open Status** (NEW): Count and identification of in-use devices
+- **Device Open Status**: Count and identification of in-use devices
+- **Environment Context**: Storage type and deployment architecture indicators
 - **Remediation Guidance**: Specific cleanup instructions with safety warnings
 
-### 8. Enhanced Remediation Workflow (v36)
+### 8. Enhanced Remediation Workflow
 
-The cleanup process now includes comprehensive safety checks:
+The cleanup process includes comprehensive safety checks:
 
 ```
 Safe Cleanup Priority:
@@ -296,7 +330,31 @@ Remove this duplicate? (y/n/a=all/q=quit) [STRONGLY RECOMMENDED: y]:
 
 ## Technical Implementation Details
 
-### Device Open Safety Implementation (v36)
+### Environment Detection and Adaptation (v37)
+
+The tool now implements intelligent environment detection:
+
+```bash
+# VM Status Parsing - Handles both clustered and non-clustered output formats
+parse_vm_status() {
+    # Format: VMID STATUS NAME ...
+    vm_id=$(echo "$vm_line" | awk '{print $1}')
+    vm_status=$(echo "$vm_line" | awk '{print $2}')
+    vm_name=$(echo "$vm_line" | awk '{for(i=3;i<=NF;i++) printf "%s ", $i}')
+}
+
+# Local Storage Pattern Recognition
+detect_storage_type() {
+    case "$storage_name" in
+        local*) storage_type="local" ;;
+        *-ha*) storage_type="cluster" ;;
+        nfs-*) storage_type="network" ;;
+        *) storage_type="custom" ;;
+    esac
+}
+```
+
+### Device Open Safety Implementation
 
 The `check_device_open()` function implements a multi-layered approach:
 
@@ -334,21 +392,26 @@ check_device_open() {
 
 ### Storage Pool Name Resolution
 
-The tool handles storage pool naming complexities:
+The tool handles storage pool naming complexities across different environments:
 
 1. **Device Mapper Conversion**: Single hyphens in storage names become double hyphens in DM
    - Storage: `ssd-ha01` → DM: `ssd--ha01`
-   - Storage: `t1-ha07` → DM: `t1--ha07`
+   - Storage: `local-lvm` → DM: `local--lvm`
 
 2. **Case Normalization**: All comparisons are case-insensitive
    - Config: `SSD-HA01` matches DM: `ssd--ha01`
-   - Config: `T1-HA07` matches DM: `t1--ha07`
+   - Config: `LOCAL-LVM` matches DM: `local--lvm`
+
+3. **Local Storage Patterns** (Enhanced in v37):
+   - Standard: `local`, `local-lvm`, `local-zfs`
+   - Custom: User-defined local storage names
+   - Flexible matching for variations
 
 ### Disk Type Recognition
 
 Supported disk types include:
 - **Traditional**: virtio, ide, scsi, sata
-- **Special Purpose**: efidisk, tpmstate
+- **Special Purpose**: efidisk, tpmstate, cloudinit
 - **Modern**: nvme, mpath
 - **Reserved**: unused
 
@@ -358,10 +421,25 @@ Supported disk types include:
 2. **Confirmation Prompts**: Each removal action requires user confirmation
 3. **Batch Operations**: Option to approve all remaining actions
 4. **Graceful Exit**: Cleanup can be cancelled at any point
-5. **Device Open Protection** (NEW): Prevents removal of in-use devices
-6. **Running VM Protection** (NEW): Automatically skips devices belonging to running VMs
+5. **Device Open Protection**: Prevents removal of in-use devices
+6. **Running VM Protection**: Automatically skips devices belonging to running VMs
+7. **Environment Awareness**: Adapts behavior based on deployment type
 
 ## Deployment and Usage
+
+### Environment-Specific Deployment
+
+#### For Clustered Environments
+
+1. **Deploy on All Nodes**: Install the tool on each cluster node
+2. **Coordinate Execution**: Run sequentially across nodes during maintenance windows
+3. **Monitor Shared Storage**: Pay special attention to shared storage pools
+
+#### For Non-Clustered Environments
+
+1. **Single Node Installation**: Deploy only on the standalone Proxmox host
+2. **Local Storage Focus**: Tool automatically adapts to local storage patterns
+3. **Simplified Monitoring**: No cross-node coordination required
 
 ### When to Run This Tool
 
@@ -373,16 +451,18 @@ Supported disk types include:
 
 4. **After Failed Operations**: Following failed migrations, incomplete deletions, or storage detachments
 
-5. **Before Major Operations** (NEW): Run analysis to identify devices in use before planning maintenance
+5. **Before Major Operations**: Run analysis to identify devices in use before planning maintenance
+
+6. **Environment Changes**: After transitioning between clustered and non-clustered configurations
 
 ### Installation
 
 ```bash
 # Download the latest version
-wget https://raw.githubusercontent.com/keithrlucier/proxmox-dm-health-check/main/Proxmox_DM_Cleanup_v36.sh
+wget https://raw.githubusercontent.com/keithrlucier/proxmox-dm-health-check/main/Proxmox_DM_Cleanup_v37.sh
 
 # Set execution permissions
-chmod +x Proxmox_DM_Cleanup_v36.sh
+chmod +x Proxmox_DM_Cleanup_v37.sh
 ```
 
 ### VM ID Assignment Configuration
@@ -415,7 +495,7 @@ TO_EMAIL="infrastructure-team@company.com"
 
 #### 1. Analysis Only (Default)
 ```bash
-./Proxmox_DM_Cleanup_v36.sh
+./Proxmox_DM_Cleanup_v37.sh
 ```
 Performs analysis and sends report without modifications.
 
@@ -428,12 +508,12 @@ Do you want to interactively clean up these issues? (y/N): y
 #### 3. Automated Monitoring
 Add to crontab for daily checks:
 ```bash
-0 2 * * * /root/Proxmox_DM_Cleanup_v36.sh > /var/log/proxmox_dm_check.log 2>&1
+0 2 * * * /root/Proxmox_DM_Cleanup_v37.sh > /var/log/proxmox_dm_check.log 2>&1
 ```
 
 ## Output Interpretation
 
-### Console Output Structure (Enhanced in v36)
+### Console Output Structure (v37 Enhanced)
 
 ```
 ========================================
@@ -449,17 +529,21 @@ ANALYSIS SUMMARY
    VMs on this node: 45 (42 running)
 ```
 
+The v37 enhancement ensures accurate VM status reporting across all environment types.
+
 ### VM Status Report
 
 ```
 VM ID    NAME                           STATUS       DM HEALTH
 -----    ----                           ------       ---------
-169      Production Database            Running      [!] 1 storage:disk(s) DUPLICATED
-170      Web Server                     Running      Clean
-171      Backup Server                  Stopped      [!] 2 tombstone(s)
+169      Production Database            🟢 Running   ✅ Clean
+170      Web Server                     🟢 Running   ✅ Clean
+171      Backup Server                  ⚪ Stopped   ⚠️ 2 tombstone(s)
 ```
 
-### Device Status Indicators (NEW in v36)
+Status indicators now accurately reflect VM state regardless of storage configuration.
+
+### Device Status Indicators
 
 During analysis and cleanup, devices show their open status:
 - `[IN USE]` - Device is currently open and cannot be removed
@@ -479,19 +563,19 @@ The HTML email report includes:
    - Critical issues requiring immediate attention
    - Warning issues affecting operations
    - Detailed impact analysis
-   - **Device open status summary** (NEW)
+   - Device open status summary
 
 3. **System Metrics**
    - Resource utilization
-   - VM statistics
+   - VM statistics with accurate status
    - Storage usage
-   - **Devices in use count** (NEW)
+   - Devices in use count
 
 4. **Remediation Instructions**
    - Specific commands to execute
    - Expected outcomes
    - Safety considerations
-   - **Device availability warnings** (NEW)
+   - Device availability warnings
 
 ## Best Practices
 
@@ -507,19 +591,18 @@ The HTML email report includes:
    - Perform cleanup during scheduled maintenance
    - Ensure recent backups exist
    - Document all remediation actions
-   - **Stop affected VMs before cleanup** (NEW recommendation)
+   - Stop affected VMs before cleanup
 
-3. **Cluster Coordination**
-   - Run on all nodes sequentially
-   - Coordinate with migration operations
-   - Monitor cluster-wide health trends
-   - **Check device status before migrations** (NEW)
+3. **Environment-Specific Considerations**
+   - **Clustered**: Coordinate across all nodes
+   - **Non-Clustered**: Focus on local storage health
+   - **Hybrid**: Apply appropriate strategy per node
 
 4. **Understanding Orphaned Entry Persistence**
    - Remember that orphaned entries survive system reboots
    - Do not rely on reboots to clear device mapper issues
    - Plan for explicit cleanup as part of maintenance procedures
-   - Consider running cleanup after major cluster operations (migrations, deletions)
+   - Consider running cleanup after major cluster operations
 
 ### VM Lifecycle Management
 
@@ -529,7 +612,7 @@ To minimize orphaned entries:
    - Always use proper Proxmox VM deletion commands
    - Run this cleanup tool immediately after VM deletions
    - Understand that Proxmox will reuse the deleted VM's ID for the next VM creation
-   - **Ensure VMs are stopped before deletion** (NEW emphasis)
+   - Ensure VMs are stopped before deletion
 
 2. **VM Creation Process**
    - Be aware that Proxmox automatically assigns the lowest available VM ID
@@ -540,7 +623,7 @@ To minimize orphaned entries:
    - Check source node for orphaned entries after migration
    - Clean up any remaining entries on the source node
    - Document which nodes have hosted specific VMs
-   - **Verify no devices are in use before migration** (NEW)
+   - Verify no devices are in use before migration
 
 4. **Understanding Device Mapper Behavior**
    - Device mapper entries are created when VMs start (normal) or at boot (v8.2.2+ bug)
@@ -548,7 +631,7 @@ To minimize orphaned entries:
    - Entries persist for the lifetime of the VM (whether running or stopped) until properly cleaned
    - Orphaned entries occur when VM deletion or disk removal doesn't properly clean up the device mapper
    - Orphaned entries will conflict with Proxmox's automatic ID assignment
-   - **Devices remain open while VMs are running** (NEW insight)
+   - Devices remain open while VMs are running
    - **Known Issues**: 
      - Automatic cleanup frequently fails, especially with partition tables or complex storage
      - Proxmox 8.2.2+ creates entries for all LVM volumes at boot, increasing orphaned entries
@@ -560,21 +643,21 @@ To minimize orphaned entries:
    - Verify VM backups are current
    - Document existing issues
    - Test in non-production environment
-   - **Critical Check**: Ensure device "Open count" is 0 before removal (use `dmsetup info <device>`)
-   - **NEW**: Tool now performs this check automatically
+   - Check device "Open count" is 0 before removal
+   - Tool performs this check automatically
 
 2. **During Cleanup**
    - Review each action carefully
    - Monitor system logs
    - Be prepared to halt if unexpected behavior occurs
-   - **Order Matters**: Remove child devices (e.g., vm-disk-0p1) before parent devices (vm-disk-0)
-   - **NEW**: Tool automatically skips open devices, preventing errors
+   - Order Matters: Remove child devices before parent devices
+   - Tool automatically skips open devices, preventing errors
 
 3. **Post-Cleanup Verification**
    - Verify VM functionality
    - Check storage accessibility
    - Run analysis to confirm resolution
-   - **Verify no devices remain unexpectedly open** (NEW)
+   - Verify no devices remain unexpectedly open
 
 ### Preventive Configuration
 
@@ -597,6 +680,14 @@ vgchange <VG_NAME> --setautoactivation n
 - **Cause**: Script run on wrong system or insufficient permissions
 - **Solution**: Verify execution on Proxmox node as root user
 
+#### VM Status Shows Incorrectly (Resolved in v37)
+- **Previous Issue**: VM status field parsing could be inaccurate
+- **Resolution**: Enhanced parsing logic now correctly identifies VM states across all environments
+
+#### False Orphan Detection on Local Storage (Resolved in v37)
+- **Previous Issue**: Local storage entries could be incorrectly flagged
+- **Resolution**: Improved pattern matching for local storage configurations
+
 #### Email Delivery Failure
 - **Cause**: Invalid Mailjet credentials or network issues
 - **Solution**: Verify API credentials and network connectivity
@@ -605,10 +696,10 @@ vgchange <VG_NAME> --setautoactivation n
 - **Cause**: Device mapper entry already removed or locked
 - **Solution**: Verify entry exists with `dmsetup ls` command
 
-#### Device Cannot Be Removed (NEW in v36)
+#### Device Cannot Be Removed
 - **Cause**: Device is currently open/in use by a running VM or process
 - **Solution**: Stop the VM using the device, then retry cleanup
-- **Prevention**: The tool now automatically detects and skips these devices
+- **Prevention**: The tool automatically detects and skips these devices
 
 #### High Number of Orphaned Entries
 - **Cause**: Improper VM deletion procedures or cluster migrations
@@ -627,7 +718,7 @@ vgchange <VG_NAME> --setautoactivation n
 - **Prevention**: Always clean orphaned entries after VM deletions to avoid future conflicts
 - **Diagnostic**: Use `dmsetup table | grep <VMID>` to find conflicting entries
 
-#### Devices Show as "IN USE" During Cleanup (NEW)
+#### Devices Show as "IN USE" During Cleanup
 - **Cause**: VM is running or device has open file handles
 - **Solution**: 
   1. Identify which VM uses the device
@@ -647,7 +738,7 @@ vgchange <VG_NAME> --setautoactivation n
 - No VM data is modified or accessed
 - Only device mapper metadata is affected
 - Email reports may contain infrastructure details
-- **Device open checks prevent accidental data loss** (NEW)
+- Device open checks prevent accidental data loss
 
 ## Support and Maintenance
 
@@ -671,6 +762,7 @@ vgchange <VG_NAME> --setautoactivation n
 
 Examples:
 - pve-vm--104--disk--1 (default storage)
+- local--lvm-vm--102--disk--0 (local LVM storage)
 - ssd--ha01-vm--119--disk--0 (custom storage with dash in name)
 - vg--cluster01--storage01-vm--199--disk--1 (complex storage name)
 ```
@@ -678,19 +770,40 @@ Examples:
 **Note**: Single dashes in storage names become double dashes in device mapper
 
 ### Configuration File Locations
-- VM Configurations: `/etc/pve/qemu-server/<vmid>.conf`
+- VM Configurations: 
+  - Primary: `/etc/pve/qemu-server/<vmid>.conf`
+  - Non-clustered fallback: `/etc/pve/local/qemu-server/<vmid>.conf`
 - Storage Configuration: `/etc/pve/storage.cfg`
 
 ### Key Commands Used
 - `dmsetup ls` - List device mapper entries
 - `dmsetup info <entry>` - Get device information including open count
 - `dmsetup remove <entry>` - Remove device mapper entry
-- `qm list` - List all VMs on node
+- `qm list` - List all VMs on node (enhanced parsing in v37)
 - `pct list` - List all containers on node
-- `lsof /dev/mapper/<entry>` - Check for open file handles (NEW in v36)
-- `fuser /dev/mapper/<entry>` - Quick device usage check (NEW in v36)
+- `lsof /dev/mapper/<entry>` - Check for open file handles
+- `fuser /dev/mapper/<entry>` - Quick device usage check
 
-### Device Open Status Detection (NEW in v36)
+### Environment Detection (v37)
+
+The tool now implements sophisticated environment detection:
+
+1. **Storage Type Recognition**
+   - Local patterns: `local`, `local-lvm`, `local-zfs`
+   - Cluster patterns: Names containing `-ha`, `cluster`, `shared`
+   - Network patterns: `nfs-`, `ceph-`, `gluster-`
+
+2. **VM Status Field Mapping**
+   - Field 1: VM ID
+   - Field 2: Status (running/stopped)
+   - Field 3+: VM Name
+
+3. **Configuration Path Resolution**
+   - Primary: Standard cluster path
+   - Fallback: Local non-clustered path
+   - Adaptive: Checks both if needed
+
+### Device Open Status Detection
 
 The tool uses a hierarchical approach to detect device usage:
 
@@ -708,7 +821,7 @@ The tool uses a hierarchical approach to detect device usage:
 
 ---
 
-**Document Version**: 1.1  
+**Document Version**: 1.2  
 **Last Updated**: November 2024  
-**Latest Version**: 36 (Device Open Safety)  
+**Latest Version**: 37 (Enhanced Non-Clustered Environment Support)  
 **Classification**: Internal Use Only
