@@ -1,10 +1,9 @@
 #!/bin/bash
-# VERSION 37 - Proxmox Device Mapper Issue Detector
+# VERSION 37 - Proxmox Device Mapper Issue Detector - FIXED
 # CRITICAL FIX v37: Fixed VM status parsing - was reading wrong field from qm list
 # CRITICAL FIX v37: Fixed false tombstone detection for local storage configurations
 # CRITICAL FIX v37: Added support for local/non-clustered storage patterns
 # NEW IN v36: Added device open safety check before removal attempts
-# CRITICAL FIX v35: Fixed case sensitivity bug - storage pools now compared case-insensitively
 # Detects DUPLICATE and TOMBSTONED device mapper entries
 # Shows VM status with health indicators
 # Identifies critical issues that cause VM failures
@@ -17,7 +16,7 @@ FROM_EMAIL="FROM EMAIL"
 FROM_NAME="ProxMox DM Issue Detector"
 TO_EMAIL="TO EMAIL"
 
-echo "Proxmox Device Mapper Issue Detector v37"
+echo "Proxmox Device Mapper Issue Detector v37 - FIXED"
 echo "Node: $(hostname)"
 echo "Date: $(date)"
 echo "Mode: DUPLICATE & TOMBSTONE DETECTION + OPTIONAL CLEANUP + EMAIL REPORTING"
@@ -84,13 +83,21 @@ else
     echo "   Found $TOTAL_VMS VMs total"
 fi
 
-# Count running VMs for statistics - FIX v37: Check column 2 for status
-RUNNING_VMS=$(awk '$2 == "running" {print $1}' "$VM_LIST_FILE")
-if [ -n "$RUNNING_VMS" ]; then
-    RUNNING_VMS_COUNT=$(echo "$RUNNING_VMS" | wc -w)
-else
-    RUNNING_VMS_COUNT=0
-fi
+# Count running VMs for statistics - STATUS is in field 3!
+RUNNING_VMS=""
+while IFS= read -r vm_line; do
+    vm_status=$(echo "$vm_line" | awk '{print $3}')  # FIELD 3, NOT 2!
+    if [ "$vm_status" = "running" ]; then
+        vm_id=$(echo "$vm_line" | awk '{print $1}')
+        if [ -z "$RUNNING_VMS" ]; then
+            RUNNING_VMS="$vm_id"
+        else
+            RUNNING_VMS="$RUNNING_VMS $vm_id"
+        fi
+        RUNNING_VMS_COUNT=$((RUNNING_VMS_COUNT + 1))
+    fi
+done < "$VM_LIST_FILE"
+
 echo "   $RUNNING_VMS_COUNT VMs are currently running"
 echo ""
 
@@ -116,47 +123,46 @@ TOTAL_DM_ENTRIES=$(wc -l < "$DM_TEMP_FILE")
 echo "Found $TOTAL_DM_ENTRIES device mapper entries to analyze"
 echo ""
 
-# Function to parse VM disk configuration - ENHANCED v37
+# Function to parse VM disk configuration - FIXED for local storage
 parse_vm_config() {
     local vm_id="$1"
     local config_file="/etc/pve/qemu-server/${vm_id}.conf"
     
     if [ ! -f "$config_file" ]; then
-        # Try local config path for non-clustered setups
         config_file="/etc/pve/local/qemu-server/${vm_id}.conf"
         if [ ! -f "$config_file" ]; then
             return 1
         fi
     fi
     
-    # Extract ALL disk configurations including special disk types
+    # Extract ALL disk configurations
     grep -E "^(virtio|ide|scsi|sata|efidisk|tpmstate|nvme|mpath|unused)[0-9]+:" "$config_file" | while IFS= read -r line; do
-        # Extract storage and disk info
-        disk_def=$(echo "$line" | cut -d: -f2- | cut -d, -f1 | xargs)
+        # Get the full disk definition after the first colon
+        disk_def=$(echo "$line" | cut -d: -f2- | xargs)
         
-        # Handle different disk patterns - ENHANCED v37 for local storage
-        # Pattern 1: storage:vm-id-disk-num (standard)
-        # Pattern 2: local-lvm:vm-id-disk-num (local storage)
-        # Pattern 3: local:vm-id-disk-num (local directory storage)
-        if echo "$disk_def" | grep -E "^[^:]+:.*vm-[0-9]+-(disk|cloudinit|tmp-state)-[0-9]+.*$" >/dev/null; then
-            # Convert storage pool to lowercase for case-insensitive comparison
+        # Check if it contains a storage:disk pattern
+        if echo "$disk_def" | grep -q ":"; then
+            # Extract storage pool (before the first colon in the value)
             storage_pool=$(echo "$disk_def" | cut -d: -f1 | tr '[:upper:]' '[:lower:]')
-            # Get the part after the colon
+            
+            # Get everything after first colon
             disk_part=$(echo "$disk_def" | cut -d: -f2)
-            # Extract just the vm-id-disk-num part, ignoring any size or format info
-            disk_name=$(echo "$disk_part" | sed 's/,.*$//' | sed 's/\..*$//')
             
-            # Extract disk number from patterns like vm-102-disk-0
-            disk_num=$(echo "$disk_name" | sed -n 's/.*-\(disk\|cloudinit\|tmp-state\)-\([0-9]\+\)$/\2/p')
-            
-            if [ -n "$disk_num" ]; then
-                echo "CONFIG:${vm_id}:${storage_pool}:${disk_num}"
+            # Extract disk number from patterns like vm-102-disk-0,cache=writeback...
+            # Look specifically for vm-VMID-disk-NUM pattern
+            if echo "$disk_part" | grep -E "vm-${vm_id}-(disk|cloudinit|tmp-state)-[0-9]+" >/dev/null; then
+                # Extract just the disk number
+                disk_num=$(echo "$disk_part" | sed -n "s/^vm-${vm_id}-\(disk\|cloudinit\|tmp-state\)-\([0-9]\+\).*/\2/p")
+                
+                if [ -n "$disk_num" ]; then
+                    echo "CONFIG:${vm_id}:${storage_pool}:${disk_num}"
+                fi
             fi
         fi
     done
 }
 
-# Function to parse device mapper entries - ENHANCED v37
+# Function to parse device mapper entries
 parse_dm_entries() {
     while IFS= read -r dm_line; do
         DM_NAME=$(echo "$dm_line" | awk '{print $1}')
@@ -166,15 +172,12 @@ parse_dm_entries() {
             # Extract storage pool by getting everything before 'vm--'
             STORAGE_PART=$(echo "$DM_NAME" | sed 's/-vm--.*//')
             
-            # Convert double dashes back to single (DM converts - to --)
-            # But preserve legitimate -- in storage names
+            # Convert double dashes back to single
             STORAGE_PART=$(echo "$STORAGE_PART" | sed 's/--/-/g')
             
             # Extract disk number
             DISK_NUM=$(echo "$DM_NAME" | sed -n 's/.*--disk--\([0-9]\+\).*/\1/p')
             
-            # For local storage, dmsetup might show different patterns
-            # Handle both "local-lvm" and "local" storage types
             if [ -z "$DISK_NUM" ]; then
                 # Try alternative pattern for local storage
                 DISK_NUM=$(echo "$DM_NAME" | sed -n 's/.*--\([0-9]\+\)$/\1/p')
@@ -200,10 +203,12 @@ done
 CONFIG_COUNT=$(wc -l < "$CONFIG_TEMP_FILE" 2>/dev/null || echo 0)
 echo "   Found $CONFIG_COUNT disk configurations across $TOTAL_VMS VMs"
 
-# Debug output for troubleshooting - remove in production
-if [ "$CONFIG_COUNT" -eq 0 ] && [ "$TOTAL_VMS" -gt 0 ]; then
-    echo "   ⚠️  Warning: No disk configurations found despite having VMs"
-    echo "   This might indicate a configuration parsing issue"
+# Debug: Show what we found in configs (remove in production)
+if [ "$CONFIG_COUNT" -gt 0 ]; then
+    echo "   Config entries found:"
+    head -5 "$CONFIG_TEMP_FILE" | while read line; do
+        echo "     $line"
+    done
 fi
 
 # Parse all DM entries
@@ -227,12 +232,11 @@ while IFS= read -r dm_line; do
 done < "$DM_PARSED_FILE"
 echo "   Found $DEVICES_IN_USE_COUNT devices currently in use"
 
-# Check for DUPLICATES first (multiple DM entries for same VM+storage+disk)
+# Check for DUPLICATES first
 echo ""
 echo "Step 4: Detecting DUPLICATE entries (critical issue!)..."
 echo ""
 
-# Include storage pool in duplicate detection (VM:STORAGE:DISK)
 awk -F: '{print $2":"$3":"$4}' "$DM_PARSED_FILE" | sort | uniq -c | while read count vm_storage_disk; do
     if [ "$count" -gt 1 ]; then
         vm_id=$(echo "$vm_storage_disk" | cut -d: -f1)
@@ -242,10 +246,8 @@ awk -F: '{print $2":"$3":"$4}' "$DM_PARSED_FILE" | sort | uniq -c | while read c
         echo "❌ CRITICAL DUPLICATE: VM $vm_id storage $storage disk-$disk_num has $count device mapper entries!"
         echo "   → This WILL cause unpredictable behavior and VM failures!"
         
-        # Find all DM entries for this duplicate (matching VM, storage, and disk)
         grep "^DM:${vm_id}:${storage}:${disk_num}:" "$DM_PARSED_FILE" | while IFS= read -r dup_line; do
             dm_name=$(echo "$dup_line" | cut -d: -f5)
-            # Check if device is in use
             if grep -q "^${dup_line}$" "$DEVICES_IN_USE_FILE"; then
                 echo "      - $dm_name [IN USE]"
             else
@@ -298,15 +300,33 @@ while IFS= read -r dm_line; do
             # VM exists, check if this disk is in its config
             DISK_IN_CONFIG=false
             
-            # ENHANCED v37: More flexible matching for local storage
-            # Check for exact match first
+            # Look for exact match in config
             if grep -q "^CONFIG:${VM_ID}:${STORAGE}:${DISK_NUM}$" "$CONFIG_TEMP_FILE"; then
                 DISK_IN_CONFIG=true
             else
-                # Check for local storage variations (local, local-lvm, etc)
-                if echo "$STORAGE" | grep -q "^local"; then
+                # CRITICAL: Handle Proxmox default storage mapping
+                # "pve" in DM maps to "local-lvm" in config
+                if [ "$STORAGE" = "pve" ]; then
+                    if grep -q "^CONFIG:${VM_ID}:local-lvm:${DISK_NUM}$" "$CONFIG_TEMP_FILE"; then
+                        DISK_IN_CONFIG=true
+                    fi
+                elif echo "$STORAGE" | grep -q "^local"; then
+                    # Look for any local storage variant with same VM and disk num
                     if grep -E "^CONFIG:${VM_ID}:local[^:]*:${DISK_NUM}$" "$CONFIG_TEMP_FILE" | grep -q .; then
                         DISK_IN_CONFIG=true
+                    fi
+                fi
+                
+                # Also try matching without the storage prefix for some edge cases
+                if [ "$DISK_IN_CONFIG" = "false" ]; then
+                    # Check if there's ANY disk with this number for this VM
+                    if grep -E "^CONFIG:${VM_ID}:[^:]+:${DISK_NUM}$" "$CONFIG_TEMP_FILE" | grep -q .; then
+                        # Get the actual storage from config
+                        CONFIG_STORAGE=$(grep -E "^CONFIG:${VM_ID}:[^:]+:${DISK_NUM}$" "$CONFIG_TEMP_FILE" | head -1 | cut -d: -f3)
+                        # Compare normalized versions
+                        if [ "$(echo "$CONFIG_STORAGE" | tr -d '-')" = "$(echo "$STORAGE" | tr -d '-')" ]; then
+                            DISK_IN_CONFIG=true
+                        fi
                     fi
                 fi
             fi
@@ -318,7 +338,6 @@ while IFS= read -r dm_line; do
         fi
         
         if [ "$IS_TOMBSTONED" = "true" ]; then
-            # Note if device is in use
             IN_USE_MSG=""
             if grep -q "^${dm_line}$" "$DEVICES_IN_USE_FILE"; then
                 IN_USE_MSG=" [DEVICE IN USE]"
@@ -412,20 +431,17 @@ if [ "$TOTAL_VMS" -gt 0 ]; then
     printf "%-8s %-40s %-12s %s\n" "-----" "----" "------" "---------"
     
     while IFS= read -r vm_line; do
-        # FIX v37: Correct field extraction from qm list output
-        # Format is: VMID STATUS NAME ...
+        # FIXED: Correct field extraction from qm list output
+        # Format: VMID NAME STATUS ...
         vm_id=$(echo "$vm_line" | awk '{print $1}')
-        vm_status=$(echo "$vm_line" | awk '{print $2}')
-        # Get everything from field 3 onward as the name
-        vm_name=$(echo "$vm_line" | awk '{for(i=3;i<=NF;i++) printf "%s ", $i; print ""}' | xargs)
+        vm_name=$(echo "$vm_line" | awk '{print $2}')     # NAME is field 2
+        vm_status=$(echo "$vm_line" | awk '{print $3}')   # STATUS is field 3!
         
         # Check health status
         health_status="✅ Clean"
         
         # Check for duplicates (most critical)
         if [ -s "$VM_DUPLICATES_FILE" ] && grep -q "^${vm_id}$" "$VM_DUPLICATES_FILE"; then
-            dup_count=$(grep "^DM:${vm_id}:" "$DUPLICATE_FILE" | wc -l)
-            # Count unique storage:disk combinations with duplicates
             unique_storage_disks=$(grep "^DM:${vm_id}:" "$DUPLICATE_FILE" | cut -d: -f3,4 | sort -u | wc -l)
             health_status="🚨 $unique_storage_disks storage:disk(s) DUPLICATED!"
         # Check for tombstones
@@ -434,7 +450,7 @@ if [ "$TOTAL_VMS" -gt 0 ]; then
             health_status="⚠️  $issue_count tombstone(s)"
         fi
         
-        # Format status
+        # Format status correctly
         if [ "$vm_status" = "running" ]; then
             status_display="🟢 Running"
         else
@@ -976,17 +992,16 @@ EOF
         
         # Display each VM
         while IFS= read -r vm_line; do
-            # FIX v37: Correct field extraction
+            # FIXED: Correct field extraction - VMID NAME STATUS
             vm_id=$(echo "$vm_line" | awk '{print $1}')
-            vm_status=$(echo "$vm_line" | awk '{print $2}')
-            vm_name=$(echo "$vm_line" | awk '{for(i=3;i<=NF;i++) printf "%s ", $i; print ""}' | xargs)
+            vm_name=$(echo "$vm_line" | awk '{print $2}')     # NAME is field 2
+            vm_status=$(echo "$vm_line" | awk '{print $3}')   # STATUS is field 3!
             
             # Check health - duplicates are most critical
             health_html=""
             row_style=""
             
             if [ -s "$VM_DUPLICATES_FILE" ] && grep -q "^${vm_id}$" "$VM_DUPLICATES_FILE"; then
-                # Count unique storage:disk combinations with duplicates
                 unique_storage_disks=$(grep "^DM:${vm_id}:" "$DUPLICATE_FILE" | cut -d: -f3,4 | sort -u | wc -l)
                 health_html="<span style='color: #dc3545; font-weight: bold;'>🚨 $unique_storage_disks storage:disk(s) DUPLICATED!</span>"
                 row_style="background-color: #ffebee;"
@@ -1080,7 +1095,7 @@ EOF
     fi
     
     echo "        <div class='footer'>"
-    echo "            <p><strong>ProxMox DM Issue Detector v37</strong></p>"
+    echo "            <p><strong>ProxMox DM Issue Detector v37 - FIXED</strong></p>"
     echo "            <p>Fixed: VM status parsing & local storage support</p>"
     echo "            <p>Node: <strong>$(hostname)</strong> • Generated: $(date)</p>"
     echo "        </div>"
