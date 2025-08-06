@@ -1,5 +1,5 @@
 #!/bin/bash
-# VERSION 37 - Proxmox Device Mapper Issue Detector - FIXED
+# VERSION 37 - Proxmox Device Mapper Issue Detector
 # CRITICAL FIX v37: Fixed VM status parsing - was reading wrong field from qm list
 # CRITICAL FIX v37: Fixed false tombstone detection for local storage configurations
 # CRITICAL FIX v37: Added support for local/non-clustered storage patterns
