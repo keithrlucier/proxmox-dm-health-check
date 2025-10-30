@@ -9,7 +9,7 @@ FROM_EMAIL="approvedsender@approveddomain.com"
 FROM_NAME="ProxMox DM Issue Detector"
 TO_EMAIL="target@email.com"
 
-echo "Proxmox Device Mapper Issue Detector v37 - FIXED"
+echo "Proxmox Device Mapper Issue Detector v38"
 echo "Node: $(hostname)"
 echo "Date: $(date)"
 echo "Mode: DUPLICATE & TOMBSTONE DETECTION + OPTIONAL CLEANUP + EMAIL REPORTING"
